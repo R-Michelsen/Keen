@@ -12,7 +12,12 @@ use std::{
     os::windows::ffi::OsStrExt,
     iter::once,
     ptr::null_mut,
-    time::Instant
+    time::Duration,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering}
+    },
+    thread
 };
 
 use winapi::{
@@ -20,8 +25,8 @@ use winapi::{
         winuser::{
             SetWindowLongPtrW, GetWindowLongPtrW,
             UnregisterClassW, DispatchMessageW,
-            TranslateMessage, PeekMessageW, SendMessageW, 
-            ShowWindow, CreateWindowExW, PM_REMOVE,
+            TranslateMessage, GetMessageW, SendMessageW, 
+            ShowWindow, CreateWindowExW, 
             SetProcessDpiAwarenessContext, PostQuitMessage,
             DefWindowProcW, RegisterClassW, LoadCursorW, 
             BeginPaint, EndPaint, GET_WHEEL_DELTA_WPARAM,
@@ -30,9 +35,9 @@ use winapi::{
             WM_MOUSEWHEEL, WM_LBUTTONDOWN, WM_ERASEBKGND, 
             WM_LBUTTONUP, WM_KEYDOWN, VK_SHIFT, VK_CONTROL,
             WM_CREATE, CREATESTRUCTW, GWLP_USERDATA, 
-            WM_MOUSEMOVE, WM_QUIT, SW_SHOW,
+            WM_MOUSEMOVE, WM_NCDESTROY, SW_SHOW,
             WS_OVERLAPPEDWINDOW, CS_HREDRAW, CS_VREDRAW,
-            WNDCLASSW, PAINTSTRUCT, InvalidateRect 
+            WNDCLASSW, PAINTSTRUCT, InvalidateRect, DestroyWindow
         },
         errhandlingapi::GetLastError,
         wingdi::{GetStockObject, BLACK_BRUSH}
@@ -80,13 +85,13 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 
     match msg {
         WM_CARET_VISIBLE => {
-            (*editor).caret_is_visible = true;
-            (*editor).draw();
+            (*editor).execute_command(EditorCommand::CaretVisible, EditorCommandData { dummy: false });
+            InvalidateRect(hwnd, null_mut(), false as i32);
             return 0;
         },
         WM_CARET_INVISIBLE => {
-            (*editor).caret_is_visible = false;
-            (*editor).draw();
+            (*editor).execute_command(EditorCommand::CaretInvisible, EditorCommandData { dummy: false });
+            InvalidateRect(hwnd, null_mut(), false as i32);
             return 0;
         },
         WM_PAINT => {
@@ -105,14 +110,14 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             (*editor).resize(width.into(), height.into());
             return 0;
         },
-        WM_DESTROY => {
+        WM_DESTROY | WM_NCDESTROY => {
             PostQuitMessage(0);
             return 0;
         },
         WM_CHAR => {
-            let b = [wparam as u16];
-            let a = String::from_utf16(&b);
-            println!("Received input: {:?}", a);
+            if wparam >= 0x20 || wparam == 0x9 {
+                (*editor).execute_command(EditorCommand::CharInsert, EditorCommandData { character: wparam as u16 });
+            }
             return 0;
         },
         WM_MOUSEWHEEL => {
@@ -199,34 +204,38 @@ fn main() {
 
         let mut msg = MaybeUninit::<MSG>::uninit();
 
-        let mut start = Instant::now();
-        let mut message_idx: u32 = 0;
-        
-        'outer: loop {
-            let current = Instant::now();
+        let force_finish = Arc::new(AtomicBool::new(false));
+        let force_finish_clone = force_finish.clone();
+        let hwnd_clone = hwnd as u64;
 
-            if (current - start).as_millis() > 500 {
-                SendMessageW(hwnd, WM_CARET_VISIBLE + message_idx, 0, 0);
-                message_idx ^= 1;
-                start = current;
-            }
-
-            while PeekMessageW(msg.as_mut_ptr(), 0 as HWND, 0, 0, PM_REMOVE) > 0 {
-                TranslateMessage(msg.as_mut_ptr());
-                DispatchMessageW(msg.as_mut_ptr());
-
-                match (*msg.as_ptr()).message {
-                    WM_QUIT => break 'outer,
-                    WM_LBUTTONDOWN | WM_KEYDOWN => {
-                        SendMessageW(hwnd, WM_CARET_VISIBLE, 0, 0);
-                        message_idx = 0;
-                        start = current;
-                    },
-                    _ => {}
+        let caret_blink_thread = thread::spawn(move|| {
+            let mut message_idx: u32 = 0;
+            
+            // To be able to responsively exit the thread on
+            // program close we will poll the thread every 50ms
+            let mut counter = 1;
+            while !force_finish_clone.load(Ordering::Relaxed) {
+                if counter > 10 {
+                    SendMessageW(hwnd_clone as HWND, WM_CARET_VISIBLE + message_idx, 0, 0);
+                    message_idx ^= 1;
+                    counter = 1;
                 }
+                thread::sleep(Duration::from_millis(50));
+                counter += 1;
             }
+        });
+
+        while GetMessageW(msg.as_mut_ptr(), 0 as HWND, 0, 0) > 0 {
+            TranslateMessage(msg.as_mut_ptr());
+            DispatchMessageW(msg.as_mut_ptr());
+        }
+
+        force_finish.store(true, Ordering::Relaxed);
+        if let Err(panic) = caret_blink_thread.join() {
+            println!("Caret blink thread failed with error: {:?}", panic);
         }
 
         UnregisterClassW(wnd_class_name.as_ptr(), 0 as HINSTANCE);
+        DestroyWindow(hwnd);
     }
 }

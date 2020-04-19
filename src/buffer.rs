@@ -124,7 +124,7 @@ impl TextBuffer {
         self.currently_selecting = false;
     }
 
-    pub fn set_selection(&mut self, mode: SelectionMode, count: u32, extend_current_selection: bool) {
+    pub fn set_selection(&mut self, mode: SelectionMode, count: usize, extend_current_selection: bool) {
         let caret_absolute_pos = self.get_caret_absolute_pos();
 
         match mode {
@@ -132,10 +132,10 @@ impl TextBuffer {
                 self.caret_char_pos = caret_absolute_pos;
                 if self.caret_char_pos > 0 {
                     if mode == SelectionMode::Left {
-                        self.caret_char_pos -= 1;
+                        self.caret_char_pos -= count;
                     }
                     else {
-                        self.caret_char_pos += 1;
+                        self.caret_char_pos += count;
                     }
                     self.caret_is_trailing = 0;
 
@@ -148,13 +148,13 @@ impl TextBuffer {
                 let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
 
                 unsafe {
-                    dx_ok!(((*self.text_layout).HitTestTextPosition(
+                    dx_ok!((*self.text_layout).HitTestTextPosition(
                         (self.caret_char_pos - self.absolute_char_pos_start) as u32,
                         self.caret_is_trailing,
                         &mut caret_pos.0,
                         &mut caret_pos.1,
                         metrics_uninit.as_mut_ptr()
-                    )));
+                    ));
 
                     let metrics = metrics_uninit.assume_init();
 
@@ -166,10 +166,10 @@ impl TextBuffer {
                     }
 
                     if mode == SelectionMode::Down {
-                        caret_pos.1 += metrics.height;
+                        caret_pos.1 += metrics.height * count as f32;
                     }
                     else {
-                        caret_pos.1 -= metrics.height;
+                        caret_pos.1 -= metrics.height * count as f32
                     }
                     
                     self.set_mouse_selection(MouseSelectionMode::Click, caret_pos);
@@ -232,6 +232,34 @@ impl TextBuffer {
         }
     }
 
+    pub fn insert_char(&mut self, character: u16) {
+        let caret_absolute_pos = self.get_caret_absolute_pos();
+        if caret_absolute_pos != self.caret_char_anchor {
+            let diff;
+            if caret_absolute_pos < self.caret_char_anchor {
+                self.buffer.remove(caret_absolute_pos..self.caret_char_anchor);
+                diff = self.caret_char_anchor - caret_absolute_pos;
+            }
+            else {
+                self.buffer.remove(self.caret_char_anchor..caret_absolute_pos);
+                diff = caret_absolute_pos - self.caret_char_anchor;
+            }
+            self.caret_char_pos = caret_absolute_pos - diff;
+            self.caret_is_trailing = 0;
+            self.caret_char_anchor -= diff;
+        }
+
+        // Insert 4 spaces in place of <TAB>
+        if character == 0x9 {
+            self.buffer.insert(self.get_caret_absolute_pos(), "    ");
+            self.set_selection(SelectionMode::Right, 4, false);
+        }
+        else {
+            self.buffer.insert_char(self.get_caret_absolute_pos(), (character as u8) as char);
+            self.set_selection(SelectionMode::Right, 1, false);
+        }
+    }
+
     pub fn get_caret_rect(&mut self) -> Option<D2D1_RECT_F> {
         if self.caret_char_pos < self.absolute_char_pos_start {
             return None
@@ -241,13 +269,13 @@ impl TextBuffer {
         let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
 
         unsafe {
-            dx_ok!(((*self.text_layout).HitTestTextPosition(
+            dx_ok!((*self.text_layout).HitTestTextPosition(
                 (self.caret_char_pos - self.absolute_char_pos_start) as u32,
                 self.caret_is_trailing,
                 &mut caret_pos.0,
                 &mut caret_pos.1,
                 metrics_uninit.as_mut_ptr()
-            )));
+            ));
 
             let metrics = metrics_uninit.assume_init();
 
