@@ -207,7 +207,6 @@ fn main() {
         let force_finish = Arc::new(AtomicBool::new(false));
         let force_finish_clone = force_finish.clone();
         let hwnd_clone = hwnd as u64;
-
         let caret_blink_thread = thread::spawn(move|| {
             let mut message_idx: u32 = 0;
             
@@ -220,6 +219,7 @@ fn main() {
                     message_idx ^= 1;
                     counter = 1;
                 }
+
                 thread::sleep(Duration::from_millis(50));
                 counter += 1;
             }

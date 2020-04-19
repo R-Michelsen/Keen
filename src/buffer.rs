@@ -12,7 +12,7 @@ use std::{
 use winapi::{
     um::{
         dwrite::{IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout, DWRITE_HIT_TEST_METRICS, DWRITE_TEXT_RANGE},
-        d2d1::D2D1_RECT_F,
+        d2d1::{D2D1_RECT_F, D2D1_LAYER_PARAMETERS},
         winuser::{SystemParametersInfoW, SPI_GETCARETWIDTH}
     },
     ctypes::c_void
@@ -21,6 +21,7 @@ use winapi::{
 use ropey::Rope;
 
 use crate::dx_ok;
+use crate::renderer::TextRenderer;
 
 #[derive(PartialEq)]
 pub enum SelectionMode {
@@ -38,6 +39,9 @@ pub enum MouseSelectionMode {
 pub struct TextBuffer {
     buffer: Rope,
     top_line: usize,
+    pub origin: (u32, u32),
+    pub pixel_size: (u32, u32),
+
     absolute_char_pos_start: usize,
     absolute_char_pos_end: usize,
 
@@ -50,6 +54,7 @@ pub struct TextBuffer {
 
     cached_mouse_width: f32,
 
+    pub layer_params: D2D1_LAYER_PARAMETERS,
     text_layout: *mut IDWriteTextLayout,
 
     write_factory: *mut IDWriteFactory,
@@ -57,7 +62,7 @@ pub struct TextBuffer {
 }
 
 impl TextBuffer {
-    pub fn new(path: &str, write_factory: *mut IDWriteFactory, text_format: *mut IDWriteTextFormat) -> TextBuffer {
+    pub fn new(path: &str, origin: (u32, u32), pixel_size: (u32, u32), write_factory: *mut IDWriteFactory, text_format: *mut IDWriteTextFormat) -> TextBuffer {
         let file = File::open(path).unwrap();
         let buffer = Rope::from_reader(file).unwrap();
         let absolute_char_pos_start = buffer.line_to_char(0);
@@ -73,6 +78,9 @@ impl TextBuffer {
         TextBuffer {
             buffer,
             top_line: 0,
+            origin,
+            pixel_size,
+
             absolute_char_pos_start,
             absolute_char_pos_end,
 
@@ -85,6 +93,7 @@ impl TextBuffer {
 
             cached_mouse_width: 0.0,
 
+            layer_params: TextRenderer::layer_params(origin, pixel_size),
             text_layout: null_mut(),
             write_factory,
             text_format
@@ -95,18 +104,20 @@ impl TextBuffer {
         return self.caret_char_pos + (self.caret_is_trailing as usize);
     }
 
-    pub fn scroll_down(&mut self, delta: usize) {
+    pub fn scroll_down(&mut self, delta: usize, line_height: f32) {
+        let lines_on_screen = self.pixel_size.1 / (line_height as u32); 
         self.top_line += delta;
         self.absolute_char_pos_start = self.buffer.line_to_char(self.top_line);
-        self.absolute_char_pos_end = self.buffer.line_to_char(self.top_line + 100);
+        self.absolute_char_pos_end = self.buffer.line_to_char(self.top_line + lines_on_screen as usize);
     }
 
-    pub fn scroll_up(&mut self, delta: usize) {
+    pub fn scroll_up(&mut self, delta: usize, line_height: f32) {
+        let lines_on_screen = self.pixel_size.1 / (line_height as u32); 
         if self.top_line >= delta {
             self.top_line -= delta;
         }
         self.absolute_char_pos_start = self.buffer.line_to_char(self.top_line);
-        self.absolute_char_pos_end = self.buffer.line_to_char(self.top_line + 100);
+        self.absolute_char_pos_end = self.buffer.line_to_char(self.top_line + lines_on_screen as usize);
     }
 
     pub fn left_click(&mut self, mouse_pos: (f32, f32), extend_current_selection: bool) {
@@ -192,8 +203,8 @@ impl TextBuffer {
                 unsafe {
                     dx_ok!(
                         (*self.text_layout).HitTestPoint(
-                            mouse_pos.0,
-                            mouse_pos.1,
+                            mouse_pos.0 - self.origin.0 as f32,
+                            mouse_pos.1 - self.origin.1 as f32,
                             &mut self.caret_is_trailing,
                             &mut is_inside,
                             metrics_uninit.as_mut_ptr()
@@ -215,8 +226,8 @@ impl TextBuffer {
                     unsafe {
                         dx_ok!(
                             (*self.text_layout).HitTestPoint(
-                                mouse_pos.0,
-                                mouse_pos.1,
+                                mouse_pos.0 - self.origin.0 as f32,
+                                mouse_pos.1 - self.origin.1 as f32,
                                 &mut self.caret_is_trailing,
                                 &mut is_inside,
                                 metrics_uninit.as_mut_ptr()
@@ -280,10 +291,10 @@ impl TextBuffer {
             let metrics = metrics_uninit.assume_init();
 
             let rect = D2D1_RECT_F {
-                left: caret_pos.0 - self.half_caret_width as f32,
-                top: caret_pos.1,
-                right: caret_pos.0 + (self.caret_width - self.half_caret_width) as f32,
-                bottom: caret_pos.1 + metrics.height
+                left: self.origin.0 as f32 + caret_pos.0 - self.half_caret_width as f32,
+                top: self.origin.1 as f32 + caret_pos.1,
+                right: self.origin.0 as f32 + caret_pos.0 + (self.caret_width - self.half_caret_width) as f32,
+                bottom: self.origin.1 as f32 + caret_pos.1 + metrics.height
             };
 
             return Some(rect)
@@ -315,7 +326,7 @@ impl TextBuffer {
         return Some(range);
     }
 
-    pub fn get_layout(&mut self, layout_box: (f32, f32)) -> *mut IDWriteTextLayout {
+    pub fn get_layout(&mut self) -> *mut IDWriteTextLayout {
         let lines = self.get_current_lines();
 
         unsafe {
@@ -327,13 +338,18 @@ impl TextBuffer {
                 lines.as_ptr(),
                 lines.len() as u32,
                 self.text_format,
-                layout_box.0,
-                layout_box.1,
+                self.pixel_size.0 as f32,
+                self.pixel_size.1 as f32,
                 &mut self.text_layout as *mut *mut _
             ));
         }
 
         return self.text_layout;
+    }
+
+    pub fn resize_layer(&mut self, origin: (u32, u32), size: (u32, u32)) {
+        self.pixel_size = size;
+        self.layer_params = TextRenderer::layer_params(origin, size);
     }
 
     pub fn get_current_lines(&self) -> Vec<u16> {

@@ -5,5 +5,5 @@ authors = ["Rasmus Michelsen <RMichelsen@Protonmail.com>"]
 edition = "2018"
 
 [dependencies]
-winapi = { version = "0.3.8", features = ["d2d1", "dwrite", "errhandlingapi", "winuser", "windowsx"] }
+winapi = { version = "0.3.8", features = ["d2d1", "dwrite", "dwrite_1", "errhandlingapi", "winuser", "windowsx"] }
 ropey = "1.1.0"
