@@ -14,7 +14,7 @@ use winapi::{
         dwrite::{
             DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, 
             IDWriteTextLayout, IDWriteFontCollection, IDWriteFontFamily,
-            IDWriteFont,
+            IDWriteFont, DWRITE_WORD_WRAPPING_NO_WRAP,
             DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_WEIGHT_NORMAL, 
             DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
             DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
@@ -193,6 +193,7 @@ impl TextRenderer {
 
             dx_ok!((*renderer.text_format).SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING));
             dx_ok!((*renderer.text_format).SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR));
+            dx_ok!((*renderer.text_format).SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP));
         }
 
         renderer

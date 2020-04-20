@@ -108,6 +108,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             let width = LOWORD(lparam as u32);
             let height = HIWORD(lparam as u32);
             (*editor).resize(width.into(), height.into());
+            InvalidateRect(hwnd, null_mut(), false as i32);
             return 0;
         },
         WM_DESTROY | WM_NCDESTROY => {

@@ -1,5 +1,6 @@
 use core::ops::RangeBounds;
 use std::{
+    cell::RefCell,
     cmp::min,
     fs::File,
     ffi::OsStr,
@@ -7,11 +8,12 @@ use std::{
     os::windows::ffi::OsStrExt,
     ptr::null_mut,
     mem::{swap, MaybeUninit},
+    rc::Rc,
     str
 };
 use winapi::{
     um::{
-        dwrite::{IDWriteFactory, IDWriteTextFormat, IDWriteTextLayout, DWRITE_HIT_TEST_METRICS, DWRITE_TEXT_RANGE},
+        dwrite::{IDWriteTextLayout, DWRITE_HIT_TEST_METRICS, DWRITE_TEXT_RANGE},
         d2d1::{D2D1_RECT_F, D2D1_LAYER_PARAMETERS},
         winuser::{SystemParametersInfoW, SPI_GETCARETWIDTH}
     },
@@ -57,16 +59,17 @@ pub struct TextBuffer {
     pub layer_params: D2D1_LAYER_PARAMETERS,
     text_layout: *mut IDWriteTextLayout,
 
-    write_factory: *mut IDWriteFactory,
-    text_format: *mut IDWriteTextFormat
+    renderer: Rc<RefCell<TextRenderer>>
 }
 
 impl TextBuffer {
-    pub fn new(path: &str, origin: (u32, u32), pixel_size: (u32, u32), write_factory: *mut IDWriteFactory, text_format: *mut IDWriteTextFormat) -> TextBuffer {
+    pub fn new(path: &str, origin: (u32, u32), pixel_size: (u32, u32), renderer: Rc<RefCell<TextRenderer>>) -> TextBuffer {
         let file = File::open(path).unwrap();
         let buffer = Rope::from_reader(file).unwrap();
         let absolute_char_pos_start = buffer.line_to_char(0);
-        let absolute_char_pos_end = buffer.line_to_char(100);
+        let line_height = (*renderer.borrow()).line_height as u32;
+        let lines_on_screen = pixel_size.1 / line_height;
+        let absolute_char_pos_end = buffer.line_to_char(lines_on_screen as usize);
 
         let mut caret_width: u32 = 0;
         unsafe {
@@ -78,7 +81,7 @@ impl TextBuffer {
         TextBuffer {
             buffer,
             top_line: 0,
-            origin,
+            origin: (origin.0 + line_height, origin.1),
             pixel_size,
 
             absolute_char_pos_start,
@@ -93,10 +96,10 @@ impl TextBuffer {
 
             cached_mouse_width: 0.0,
 
-            layer_params: TextRenderer::layer_params(origin, pixel_size),
+            layer_params: TextRenderer::layer_params((origin.0 + line_height, origin.1), pixel_size),
             text_layout: null_mut(),
-            write_factory,
-            text_format
+            
+            renderer
         }
     }
 
@@ -269,6 +272,8 @@ impl TextBuffer {
             self.buffer.insert_char(self.get_caret_absolute_pos(), (character as u8) as char);
             self.set_selection(SelectionMode::Right, 1, false);
         }
+
+        self.update_char_pos_end();
     }
 
     pub fn get_caret_rect(&mut self) -> Option<D2D1_RECT_F> {
@@ -334,10 +339,10 @@ impl TextBuffer {
                 (*self.text_layout).Release();
             }
 
-            dx_ok!((*self.write_factory).CreateTextLayout(
+            dx_ok!((*(*self.renderer.borrow()).write_factory).CreateTextLayout(
                 lines.as_ptr(),
                 lines.len() as u32,
-                self.text_format,
+                (*self.renderer.borrow()).text_format,
                 self.pixel_size.0 as f32,
                 self.pixel_size.1 as f32,
                 &mut self.text_layout as *mut *mut _
@@ -349,7 +354,17 @@ impl TextBuffer {
 
     pub fn resize_layer(&mut self, origin: (u32, u32), size: (u32, u32)) {
         self.pixel_size = size;
-        self.layer_params = TextRenderer::layer_params(origin, size);
+        self.layer_params = TextRenderer::layer_params(
+            (origin.0 + (*self.renderer.borrow()).line_height as u32, origin.1), 
+            size
+        );
+
+        self.update_char_pos_end();
+    }
+
+    fn update_char_pos_end(&mut self) {
+        let lines_on_screen = self.pixel_size.1 / ((*self.renderer.borrow()).line_height as u32); 
+        self.absolute_char_pos_end = self.buffer.line_to_char(self.top_line + lines_on_screen as usize);
     }
 
     pub fn get_current_lines(&self) -> Vec<u16> {

@@ -1,4 +1,4 @@
-use std::str;
+use std::{str, rc::Rc, cell::RefCell};
 use winapi::shared::windef::HWND;
 use winapi::um::winuser::{VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN};
 
@@ -28,7 +28,7 @@ pub union EditorCommandData {
 }
 
 pub struct Editor {
-    renderer: TextRenderer,
+    renderer: Rc<RefCell<TextRenderer>>,
     buffers: Vec<TextBuffer>,
     buffer_idx: usize,
 
@@ -39,7 +39,7 @@ pub struct Editor {
 impl Editor {
     pub fn new(hwnd: HWND) -> Editor {
         Editor {
-            renderer: TextRenderer::new(hwnd, "Fira Code Retina", 30.0),
+            renderer: Rc::new(RefCell::new(TextRenderer::new(hwnd, "Fira Code Retina", 30.0))),
             buffers: Vec::new(),
             buffer_idx: 0,
 
@@ -53,20 +53,19 @@ impl Editor {
         self.buffers.push(TextBuffer::new(
                 path, 
                 (0, 0), 
-                (self.renderer.pixel_size.width, self.renderer.pixel_size.height), 
-                self.renderer.write_factory,
-                self.renderer.text_format)
+                ((*self.renderer.borrow()).pixel_size.width, (*self.renderer.borrow()).pixel_size.height), 
+                self.renderer.clone())
             );
     }
 
     pub fn draw(&mut self) {
-        self.renderer.draw(&mut self.buffers[self.buffer_idx], self.caret_is_visible);
+        (*self.renderer.borrow()).draw(&mut self.buffers[self.buffer_idx], self.caret_is_visible);
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
-        self.renderer.resize(width, height);
+        (*self.renderer.borrow_mut()).resize(width, height);
         for buffer in self.buffers.iter_mut() {
-            buffer.resize_layer((0, 0), (self.renderer.pixel_size.width, self.renderer.pixel_size.height));
+            buffer.resize_layer((0, 0), ((*self.renderer.borrow()).pixel_size.width, (*self.renderer.borrow()).pixel_size.height));
         }
     }
 
@@ -88,8 +87,18 @@ impl Editor {
                     self.caret_is_visible = false;
                 }
             },
-            EditorCommand::ScrollUp => self.buffers[self.buffer_idx].scroll_up(MOUSEWHEEL_LINES_PER_ROLL, self.renderer.line_height),
-            EditorCommand::ScrollDown => self.buffers[self.buffer_idx].scroll_down(MOUSEWHEEL_LINES_PER_ROLL, self.renderer.line_height),
+            EditorCommand::ScrollUp => {
+                self.buffers[self.buffer_idx].scroll_up(
+                    MOUSEWHEEL_LINES_PER_ROLL, 
+                    (*self.renderer.borrow()).line_height
+                );
+            },
+            EditorCommand::ScrollDown => { 
+                self.buffers[self.buffer_idx].scroll_down(
+                    MOUSEWHEEL_LINES_PER_ROLL, 
+                    (*self.renderer.borrow()).line_height
+                );
+            },
             EditorCommand::LeftClick => {
                 unsafe {
                     let (mouse_pos, shift) = data.mouse_pos_shift;
