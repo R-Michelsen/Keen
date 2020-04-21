@@ -44,12 +44,14 @@ pub struct TextBuffer {
     bot_line: usize,
 
     origin: (u32, u32),
+    pixel_size: (u32, u32),
+
     pub text_origin: (u32, u32),
     text_extents: (u32, u32),
     text_visible_line_count: usize,
-    numbers_origin: (u32, u32),
-    numbers_extents: (u32, u32),
-    numbers_visible_digits_count: usize,
+    line_numbers_origin: (u32, u32),
+    line_numbers_extents: (u32, u32),
+    line_numbers_margin: u32,
 
     absolute_char_pos_start: usize,
     absolute_char_pos_end: usize,
@@ -66,8 +68,8 @@ pub struct TextBuffer {
     pub text_layer_params: D2D1_LAYER_PARAMETERS,
     text_layout: *mut IDWriteTextLayout,
 
-    pub numbers_layer_params: D2D1_LAYER_PARAMETERS,
-    numbers_layout: *mut IDWriteTextLayout,
+    pub line_numbers_layer_params: D2D1_LAYER_PARAMETERS,
+    line_numbers_layout: *mut IDWriteTextLayout,
 
     renderer: Rc<RefCell<TextRenderer>>
 }
@@ -90,13 +92,15 @@ impl TextBuffer {
             top_line: 0,
             bot_line: 0,
 
-            origin: (0, 0),
+            origin,
+            pixel_size,
+
             text_origin: (0, 0),
             text_extents: (0, 0),
             text_visible_line_count: 0,
-            numbers_origin: (0, 0),
-            numbers_extents: (0, 0),
-            numbers_visible_digits_count: 0,
+            line_numbers_origin: (0, 0),
+            line_numbers_extents: (0, 0),
+            line_numbers_margin: 0,
 
             absolute_char_pos_start: 0,
             absolute_char_pos_end: 0,
@@ -113,8 +117,8 @@ impl TextBuffer {
             text_layer_params: unsafe { MaybeUninit::<D2D1_LAYER_PARAMETERS>::zeroed().assume_init() },
             text_layout: null_mut(),
 
-            numbers_layer_params: unsafe { MaybeUninit::<D2D1_LAYER_PARAMETERS>::zeroed().assume_init() },
-            numbers_layout: null_mut(),
+            line_numbers_layer_params: unsafe { MaybeUninit::<D2D1_LAYER_PARAMETERS>::zeroed().assume_init() },
+            line_numbers_layout: null_mut(),
 
             renderer
         };
@@ -128,9 +132,13 @@ impl TextBuffer {
     }
 
     pub fn scroll_down(&mut self, delta: usize) {
-        self.top_line += delta;
-
-        // In case the number column is not wide enough
+        let new_top = self.top_line + delta;
+        if new_top > self.buffer.len_lines() {
+            self.top_line = self.buffer.len_lines() - 1;
+        }
+        else {
+            self.top_line = new_top;
+        }
         self.update_absolute_char_positions();
     }
 
@@ -216,9 +224,31 @@ impl TextBuffer {
     }
 
     pub fn set_mouse_selection(&mut self, mode: MouseSelectionMode, mouse_pos: (f32, f32)) {
-        if let Some(relative_mouse_pos) = self.translate_mouse_pos_to_text_region(mouse_pos) {
-            match mode {
-                MouseSelectionMode::Click => {
+        let relative_mouse_pos = self.translate_mouse_pos_to_text_region(mouse_pos);
+        match mode {
+            MouseSelectionMode::Click => {
+                let mut is_inside = 0;
+                let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
+
+                unsafe {
+                    dx_ok!(
+                        (*self.text_layout).HitTestPoint(
+                            relative_mouse_pos.0,
+                            relative_mouse_pos.1,
+                            &mut self.caret_is_trailing,
+                            &mut is_inside,
+                            metrics_uninit.as_mut_ptr()
+                        )
+                    );
+
+                    let metrics = metrics_uninit.assume_init();
+                    let absolute_text_pos = metrics.textPosition as usize;
+                    self.caret_char_pos = self.absolute_char_pos_start + absolute_text_pos;
+                }
+            },
+
+            MouseSelectionMode::Move => {
+                if self.currently_selecting {
                     let mut is_inside = 0;
                     let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
 
@@ -237,45 +267,15 @@ impl TextBuffer {
                         let absolute_text_pos = metrics.textPosition as usize;
                         self.caret_char_pos = self.absolute_char_pos_start + absolute_text_pos;
                     }
-                },
-
-                MouseSelectionMode::Move => {
-                    if self.currently_selecting {
-                        let mut is_inside = 0;
-                        let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
-
-                        unsafe {
-                            dx_ok!(
-                                (*self.text_layout).HitTestPoint(
-                                    relative_mouse_pos.0,
-                                    relative_mouse_pos.1,
-                                    &mut self.caret_is_trailing,
-                                    &mut is_inside,
-                                    metrics_uninit.as_mut_ptr()
-                                )
-                            );
-
-                            let metrics = metrics_uninit.assume_init();
-                            let absolute_text_pos = metrics.textPosition as usize;
-                            self.caret_char_pos = self.absolute_char_pos_start + absolute_text_pos;
-                        }
-                    }
                 }
             }
         }
-
     }
 
-    fn translate_mouse_pos_to_text_region(&self, mouse_pos: (f32, f32)) -> Option<(f32, f32)> {
+    fn translate_mouse_pos_to_text_region(&self, mouse_pos: (f32, f32)) -> (f32, f32) {
         let dx = mouse_pos.0 - self.text_origin.0 as f32;
         let dy = mouse_pos.1 - self.text_origin.1 as f32;
-        if (0.0..self.text_extents.0 as f32).contains(&dx) && 
-            (0.0..self.text_extents.1 as f32).contains(&dy) {
-            Some((dx, dy))
-        }
-        else {
-            None
-        }
+        (dx, dy)
     }
 
     pub fn insert_char(&mut self, character: u16) {
@@ -386,64 +386,88 @@ impl TextBuffer {
     }
 
     pub fn get_number_layout(&mut self) -> *mut IDWriteTextLayout {
-
-        // TODO: Optimize
         let mut nums: String = String::new();
-        for i in self.top_line..(self.bot_line + 1) {
-            nums += i.to_string().as_str();
+        let number_range_end = min(self.buffer.len_lines() - 1, self.bot_line);
+
+        for i in self.top_line..=number_range_end {
+            nums += (i + 1).to_string().as_str();
             nums += "\r\n";
         }
         let lines: Vec<u16> = OsStr::new(nums.as_str()).encode_wide().chain(once(0)).collect();
 
         unsafe {
-            if !self.numbers_layout.is_null() {
-                (*self.numbers_layout).Release();
+            if !self.line_numbers_layout.is_null() {
+                (*self.line_numbers_layout).Release();
             }
 
             dx_ok!((*self.renderer.borrow().write_factory).CreateTextLayout(
                 lines.as_ptr(),
                 lines.len() as u32,
                 self.renderer.borrow().text_format,
-                self.numbers_extents.0 as f32,
-                self.numbers_extents.1 as f32,
-                &mut self.numbers_layout as *mut *mut _
+                self.line_numbers_extents.0 as f32,
+                self.line_numbers_extents.1 as f32,
+                &mut self.line_numbers_layout as *mut *mut _
             ));
         }
 
-        self.numbers_layout
+        self.line_numbers_layout
     }
 
     pub fn update_metrics(&mut self, origin: (u32, u32), pixel_size: (u32, u32)) {
-        self.update_text_region(origin, pixel_size);
-        self.update_numbers_region(origin, pixel_size);
-        self.update_text_visible_line_count(pixel_size);
+        self.origin = origin;
+        self.pixel_size = pixel_size;
+
+        self.update_line_numbers_margin();
+        self.update_text_region();
+        self.update_numbers_region();
+        self.update_text_visible_line_count();
         self.update_absolute_char_positions();
     }
 
-    fn update_numbers_visible_digits_count(&mut self) -> usize {
-        0
+    fn update_line_numbers_margin(&mut self) {
+        let end_line_max_digits = self.get_digits_in_number(self.buffer.len_lines() as u32);
+        let font_width = self.renderer.borrow().font_width;
+        self.line_numbers_margin = (end_line_max_digits * font_width as u32) + (font_width / 2.0) as u32;
     }
 
-    fn update_text_region(&mut self, origin: (u32, u32), pixel_size: (u32, u32)) {
-        self.text_origin = (origin.0 + self.renderer.borrow().font_width as u32 + 5, origin.1);
-        self.text_extents = (pixel_size.0 - self.renderer.borrow().font_width as u32, pixel_size.1);
+    fn update_text_region(&mut self) {
+        self.text_origin = (
+            self.origin.0 + self.line_numbers_margin,
+            self.origin.1
+        );
+        self.text_extents = (
+            self.pixel_size.0 - self.line_numbers_margin,
+            self.pixel_size.1
+        );
         self.text_layer_params = TextRenderer::layer_params(self.text_origin, self.text_extents);
     }
 
-    fn update_numbers_region(&mut self, origin: (u32, u32), pixel_size: (u32, u32)) {
-        self.numbers_origin = (origin.0, origin.1);
-        self.numbers_extents = (self.renderer.borrow().font_width as u32 + 5, pixel_size.1);
-        self.numbers_layer_params = TextRenderer::layer_params(self.numbers_origin, self.numbers_extents);
+    fn update_numbers_region(&mut self) {
+        self.line_numbers_origin = (self.origin.0, self.origin.1);
+        self.line_numbers_extents = (
+            self.line_numbers_margin,
+            self.pixel_size.1
+        );
+        self.line_numbers_layer_params = TextRenderer::layer_params(
+            self.line_numbers_origin, 
+            self.line_numbers_extents
+        );
     }
 
-    fn update_text_visible_line_count(&mut self, pixel_size: (u32, u32)) {
-        self.text_visible_line_count = pixel_size.1 as usize / self.renderer.borrow().font_height as usize;
+    fn update_text_visible_line_count(&mut self) {
+        let max_lines_in_text_region = self.pixel_size.1 as usize / self.renderer.borrow().font_height as usize;
+        self.text_visible_line_count = min(self.buffer.len_lines(), max_lines_in_text_region);
     }
 
     fn update_absolute_char_positions(&mut self) {
-        self.bot_line = self.top_line + self.text_visible_line_count;
+        self.bot_line = self.top_line + (self.text_visible_line_count - 1);
         self.absolute_char_pos_start = self.buffer.line_to_char(self.top_line);
-        self.absolute_char_pos_end = self.buffer.line_to_char(self.bot_line);
+        if self.bot_line >= self.buffer.len_lines() {
+            self.absolute_char_pos_end = self.buffer.line_to_char(self.buffer.len_lines());
+        }
+        else {
+            self.absolute_char_pos_end = self.buffer.line_to_char(self.bot_line);
+        }
     }
 
     pub fn get_current_lines(&self) -> Vec<u16> {
@@ -454,5 +478,20 @@ impl TextBuffer {
         let rope_slice = self.buffer.slice(char_range);
         let chars: Vec<u8> = rope_slice.bytes().collect();
         OsStr::new(str::from_utf8(chars.as_ref()).unwrap()).encode_wide().chain(once(0)).collect()
+    }
+
+    fn get_digits_in_number(&self, number: u32) -> u32 {
+        match number {
+            0..=9 => 1,
+            10..=99 => 2,
+            100..=999 => 3,
+            1000..=9999 => 4,
+            10000..=99999 => 5,
+            100000..=999999 => 6,
+            1000000..=9999999 => 7,
+            10000000..=99999999 => 8,
+            100000000..=999999999 => 9,
+            1000000000..=4294967295 => 10
+        }
     }
 }

@@ -75,7 +75,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         // Set the box to be carried over to subsequent callbacks
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, (*uninit_editor).as_mut_ptr() as isize);
         editor = (*uninit_editor).as_mut_ptr();
-        (*editor).open_file("C:/llvm-project/clang/lib/CodeGen/CGBuiltin.cpp");
+        (*editor).open_file("C:/llvm-project/clang/include/clang/CodeGen/CGFunctionInfo.h");
     }
     else {
         editor = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Editor;

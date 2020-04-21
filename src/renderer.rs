@@ -7,20 +7,18 @@ use std::{
 };
 use winapi::{
     um::{
-        winuser::GetClientRect,
+        winuser::{ GetClientRect, GetDpiForWindow },
         dcommon::{
             D2D1_ALPHA_MODE_UNKNOWN, D2D1_PIXEL_FORMAT
         },
         dwrite::{
             DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, 
-            IDWriteTextLayout, IDWriteFontCollection, IDWriteFontFamily,
-            IDWriteFont, DWRITE_WORD_WRAPPING_NO_WRAP,
+            IDWriteTextLayout, DWRITE_WORD_WRAPPING_NO_WRAP,
             DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_WEIGHT_NORMAL, 
             DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
             DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
             DWRITE_TEXT_RANGE, DWRITE_HIT_TEST_METRICS
         },
-        dwrite_1::{IDWriteFont1, DWRITE_FONT_METRICS1 },
         d2d1::{
             ID2D1Factory, ID2D1HwndRenderTarget, D2D1CreateFactory,
             ID2D1Brush, ID2D1SolidColorBrush, D2D1_LAYER_PARAMETERS,
@@ -70,6 +68,9 @@ const BACKGROUND_COLOR: D3DCOLORVALUE = D3DCOLORVALUE {
 const TEXT_COLOR: D3DCOLORVALUE = D3DCOLORVALUE {
     r: 1.0, g: 0.95, b: 0.80, a: 1.0
 };
+const LINE_NUMBER_COLOR: D3DCOLORVALUE = D3DCOLORVALUE {
+    r: 0.7, g: 0.60, b: 0.50, a: 1.0
+};
 const CARET_COLOR: D3DCOLORVALUE = D3DCOLORVALUE {
     r: 1.0, g: 0.95, b: 0.89, a: 1.0
 };
@@ -79,6 +80,7 @@ const SELECTION_COLOR: D3DCOLORVALUE = D3DCOLORVALUE {
 
 struct Brushes {
     text: *mut ID2D1SolidColorBrush,
+    line_number: *mut ID2D1SolidColorBrush,
     caret: *mut ID2D1SolidColorBrush,
     selection: *mut ID2D1SolidColorBrush
 }
@@ -86,6 +88,7 @@ struct Brushes {
 pub struct TextRenderer {
     brushes: Brushes,
 
+    dpi_scale: f32,
     pub pixel_size: D2D1_SIZE_U,
     pub font_size: f32,
     pub font_height: f32,
@@ -103,10 +106,12 @@ impl TextRenderer {
         let mut renderer = TextRenderer {
             brushes: Brushes {
                 text: null_mut(),
+                line_number: null_mut(),
                 caret: null_mut(),
                 selection: null_mut()
             },
 
+            dpi_scale: 0.0,
             pixel_size: D2D1_SIZE_U {
                 width: 0,
                 height: 0
@@ -130,6 +135,9 @@ impl TextRenderer {
                     (&mut renderer.factory as *mut *mut _) as *mut *mut c_void
                 )
             );
+
+            let dpi = GetDpiForWindow(hwnd);
+            renderer.dpi_scale = dpi as f32 / 96.0;
 
             let mut rect_uninit = MaybeUninit::<RECT>::uninit();
             GetClientRect(hwnd, rect_uninit.as_mut_ptr());
@@ -165,6 +173,7 @@ impl TextRenderer {
             };
 
             dx_ok!((*renderer.target).CreateSolidColorBrush(&TEXT_COLOR, &brush_properties, &mut renderer.brushes.text as *mut *mut _));
+            dx_ok!((*renderer.target).CreateSolidColorBrush(&LINE_NUMBER_COLOR, &brush_properties, &mut renderer.brushes.line_number as *mut *mut _));
             dx_ok!((*renderer.target).CreateSolidColorBrush(&CARET_COLOR, &brush_properties, &mut renderer.brushes.caret as *mut *mut _));
             dx_ok!((*renderer.target).CreateSolidColorBrush(&SELECTION_COLOR, &brush_properties, &mut renderer.brushes.selection as *mut *mut _));
 
@@ -218,35 +227,32 @@ impl TextRenderer {
     }
 
     fn update_font_metrics(&mut self) {
+        static GLYPH_CHAR: u16 = 0x0061;
         unsafe {
-            let font_family_name_length = (*self.text_format).GetFontFamilyNameLength() + 1;
-            let mut font_family_name: Vec<u16> = vec![0; font_family_name_length as usize]; 
-            (*self.text_format).GetFontFamilyName(font_family_name.as_mut_ptr(), font_family_name_length);
-            let mut font_collection: *mut IDWriteFontCollection = null_mut();
-            (*self.text_format).GetFontCollection(&mut font_collection as *mut *mut _);
-            let mut font_index: u32 = 0;
-            let mut font_exists: i32 = 0;
-            (*font_collection).FindFamilyName(font_family_name.as_mut_ptr(), &mut font_index, &mut font_exists);
-            let mut font_family: *mut IDWriteFontFamily = null_mut();
-            (*font_collection).GetFontFamily(font_index, &mut font_family);
-            let mut font: *mut IDWriteFont1 = null_mut();
-            (*font_family).GetFirstMatchingFont(
-                (*self.text_format).GetFontWeight(), 
-                (*self.text_format).GetFontStretch(), 
-                (*self.text_format).GetFontStyle(),
-                (&mut font as *mut *mut _) as *mut *mut IDWriteFont
-            );
+            let mut test_text_layout: *mut IDWriteTextLayout = null_mut();
+            dx_ok!((*self.write_factory).CreateTextLayout(
+                &GLYPH_CHAR,
+                1,
+                self.text_format,
+                0.0,
+                0.0,
+                &mut test_text_layout as *mut *mut _
+            ));
 
-            let mut metrics_uninit = MaybeUninit::<DWRITE_FONT_METRICS1>::uninit();
-            (*font).GetMetrics(metrics_uninit.as_mut_ptr());
+            let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
+            let mut dummy: (f32, f32) = (0.0, 0.0);
+            dx_ok!((*test_text_layout).HitTestTextPosition(
+                0,
+                0,
+                &mut dummy.0,
+                &mut dummy.1,
+                metrics_uninit.as_mut_ptr()
+            ));
             let metrics = metrics_uninit.assume_init();
+            (*test_text_layout).Release();
 
-            self.font_height = (metrics.glyphBoxTop as f32 / metrics.designUnitsPerEm as f32) * self.font_size;
-            self.font_width = (metrics.glyphBoxRight as f32 / metrics.designUnitsPerEm as f32) * self.font_size;
-
-            (*font).Release();
-            (*font_collection).Release();
-            (*font_family).Release();
+            self.font_width = metrics.width;
+            self.font_height = metrics.height;
         }
     }
 
@@ -308,22 +314,22 @@ impl TextRenderer {
 
             let number_layout: *mut IDWriteTextLayout = text_buffer.get_number_layout();
 
-            // Push the text buffers layer params before drawing
-            (*self.target).PushLayer(&text_buffer.numbers_layer_params, null_mut());
+            // Push the line numbers layer params before drawing
+            (*self.target).PushLayer(&text_buffer.line_numbers_layer_params, null_mut());
             (*self.target).DrawTextLayout(
                 D2D1_POINT_2F { 
-                    x: text_buffer.numbers_layer_params.contentBounds.left, 
-                    y: text_buffer.numbers_layer_params.contentBounds.top
+                    x: text_buffer.line_numbers_layer_params.contentBounds.left, 
+                    y: text_buffer.line_numbers_layer_params.contentBounds.top
                 },
                 number_layout,
-                self.brushes.text as *mut ID2D1Brush,
+                self.brushes.line_number as *mut ID2D1Brush,
                 D2D1_DRAW_TEXT_OPTIONS_NONE
             );
             (*self.target).PopLayer();
 
             let text_layout: *mut IDWriteTextLayout = text_buffer.get_text_layout();
 
-            // Push the text buffers layer params before drawing
+            // Push the text layer params before drawing
             (*self.target).PushLayer(&text_buffer.text_layer_params, null_mut());
 
             if let Some(selection_range) = text_buffer.get_selection_range() {
