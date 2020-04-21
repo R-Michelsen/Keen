@@ -19,7 +19,6 @@ use winapi::{
     },
     ctypes::c_void
 };
-
 use ropey::Rope;
 
 use crate::dx_ok;
@@ -40,9 +39,17 @@ pub enum MouseSelectionMode {
 
 pub struct TextBuffer {
     buffer: Rope,
+
     top_line: usize,
-    pub origin: (u32, u32),
-    pub pixel_size: (u32, u32),
+    bot_line: usize,
+
+    origin: (u32, u32),
+    pub text_origin: (u32, u32),
+    text_extents: (u32, u32),
+    text_visible_line_count: usize,
+    numbers_origin: (u32, u32),
+    numbers_extents: (u32, u32),
+    numbers_visible_digits_count: usize,
 
     absolute_char_pos_start: usize,
     absolute_char_pos_end: usize,
@@ -56,8 +63,11 @@ pub struct TextBuffer {
 
     cached_mouse_width: f32,
 
-    pub layer_params: D2D1_LAYER_PARAMETERS,
+    pub text_layer_params: D2D1_LAYER_PARAMETERS,
     text_layout: *mut IDWriteTextLayout,
+
+    pub numbers_layer_params: D2D1_LAYER_PARAMETERS,
+    numbers_layout: *mut IDWriteTextLayout,
 
     renderer: Rc<RefCell<TextRenderer>>
 }
@@ -66,10 +76,6 @@ impl TextBuffer {
     pub fn new(path: &str, origin: (u32, u32), pixel_size: (u32, u32), renderer: Rc<RefCell<TextRenderer>>) -> TextBuffer {
         let file = File::open(path).unwrap();
         let buffer = Rope::from_reader(file).unwrap();
-        let absolute_char_pos_start = buffer.line_to_char(0);
-        let line_height = (*renderer.borrow()).line_height as u32;
-        let lines_on_screen = pixel_size.1 / line_height;
-        let absolute_char_pos_end = buffer.line_to_char(lines_on_screen as usize);
 
         let mut caret_width: u32 = 0;
         unsafe {
@@ -78,14 +84,22 @@ impl TextBuffer {
             caret_width *= 2;
         }
 
-        TextBuffer {
+        let mut text_buffer = TextBuffer {
             buffer,
-            top_line: 0,
-            origin: (origin.0 + line_height, origin.1),
-            pixel_size,
 
-            absolute_char_pos_start,
-            absolute_char_pos_end,
+            top_line: 0,
+            bot_line: 0,
+
+            origin: (0, 0),
+            text_origin: (0, 0),
+            text_extents: (0, 0),
+            text_visible_line_count: 0,
+            numbers_origin: (0, 0),
+            numbers_extents: (0, 0),
+            numbers_visible_digits_count: 0,
+
+            absolute_char_pos_start: 0,
+            absolute_char_pos_end: 0,
 
             currently_selecting: false,
             caret_char_anchor: 0,
@@ -96,31 +110,35 @@ impl TextBuffer {
 
             cached_mouse_width: 0.0,
 
-            layer_params: TextRenderer::layer_params((origin.0 + line_height, origin.1), pixel_size),
+            text_layer_params: unsafe { MaybeUninit::<D2D1_LAYER_PARAMETERS>::zeroed().assume_init() },
             text_layout: null_mut(),
-            
+
+            numbers_layer_params: unsafe { MaybeUninit::<D2D1_LAYER_PARAMETERS>::zeroed().assume_init() },
+            numbers_layout: null_mut(),
+
             renderer
-        }
+        };
+
+        text_buffer.update_metrics(origin, pixel_size);
+        text_buffer
     }
 
     pub fn get_caret_absolute_pos(&self) -> usize {
-        return self.caret_char_pos + (self.caret_is_trailing as usize);
+        self.caret_char_pos + (self.caret_is_trailing as usize)
     }
 
-    pub fn scroll_down(&mut self, delta: usize, line_height: f32) {
-        let lines_on_screen = self.pixel_size.1 / (line_height as u32); 
+    pub fn scroll_down(&mut self, delta: usize) {
         self.top_line += delta;
-        self.absolute_char_pos_start = self.buffer.line_to_char(self.top_line);
-        self.absolute_char_pos_end = self.buffer.line_to_char(self.top_line + lines_on_screen as usize);
+
+        // In case the number column is not wide enough
+        self.update_absolute_char_positions();
     }
 
-    pub fn scroll_up(&mut self, delta: usize, line_height: f32) {
-        let lines_on_screen = self.pixel_size.1 / (line_height as u32); 
+    pub fn scroll_up(&mut self, delta: usize) {
         if self.top_line >= delta {
             self.top_line -= delta;
         }
-        self.absolute_char_pos_start = self.buffer.line_to_char(self.top_line);
-        self.absolute_char_pos_end = self.buffer.line_to_char(self.top_line + lines_on_screen as usize);
+        self.update_absolute_char_positions();
     }
 
     pub fn left_click(&mut self, mouse_pos: (f32, f32), extend_current_selection: bool) {
@@ -198,39 +216,17 @@ impl TextBuffer {
     }
 
     pub fn set_mouse_selection(&mut self, mode: MouseSelectionMode, mouse_pos: (f32, f32)) {
-        match mode {
-            MouseSelectionMode::Click => {
-                let mut is_inside = 0;
-                let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
-
-                unsafe {
-                    dx_ok!(
-                        (*self.text_layout).HitTestPoint(
-                            mouse_pos.0 - self.origin.0 as f32,
-                            mouse_pos.1 - self.origin.1 as f32,
-                            &mut self.caret_is_trailing,
-                            &mut is_inside,
-                            metrics_uninit.as_mut_ptr()
-                        )
-                    );
-
-                    let metrics = metrics_uninit.assume_init();
-
-                    let absolute_text_pos = metrics.textPosition as usize;
-                    self.caret_char_pos = self.absolute_char_pos_start + absolute_text_pos;
-                }
-            },
-
-            MouseSelectionMode::Move => {
-                if self.currently_selecting {
+        if let Some(relative_mouse_pos) = self.translate_mouse_pos_to_text_region(mouse_pos) {
+            match mode {
+                MouseSelectionMode::Click => {
                     let mut is_inside = 0;
                     let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
 
                     unsafe {
                         dx_ok!(
                             (*self.text_layout).HitTestPoint(
-                                mouse_pos.0 - self.origin.0 as f32,
-                                mouse_pos.1 - self.origin.1 as f32,
+                                relative_mouse_pos.0,
+                                relative_mouse_pos.1,
                                 &mut self.caret_is_trailing,
                                 &mut is_inside,
                                 metrics_uninit.as_mut_ptr()
@@ -241,8 +237,44 @@ impl TextBuffer {
                         let absolute_text_pos = metrics.textPosition as usize;
                         self.caret_char_pos = self.absolute_char_pos_start + absolute_text_pos;
                     }
+                },
+
+                MouseSelectionMode::Move => {
+                    if self.currently_selecting {
+                        let mut is_inside = 0;
+                        let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
+
+                        unsafe {
+                            dx_ok!(
+                                (*self.text_layout).HitTestPoint(
+                                    relative_mouse_pos.0,
+                                    relative_mouse_pos.1,
+                                    &mut self.caret_is_trailing,
+                                    &mut is_inside,
+                                    metrics_uninit.as_mut_ptr()
+                                )
+                            );
+
+                            let metrics = metrics_uninit.assume_init();
+                            let absolute_text_pos = metrics.textPosition as usize;
+                            self.caret_char_pos = self.absolute_char_pos_start + absolute_text_pos;
+                        }
+                    }
                 }
             }
+        }
+
+    }
+
+    fn translate_mouse_pos_to_text_region(&self, mouse_pos: (f32, f32)) -> Option<(f32, f32)> {
+        let dx = mouse_pos.0 - self.text_origin.0 as f32;
+        let dy = mouse_pos.1 - self.text_origin.1 as f32;
+        if (0.0..self.text_extents.0 as f32).contains(&dx) && 
+            (0.0..self.text_extents.1 as f32).contains(&dy) {
+            Some((dx, dy))
+        }
+        else {
+            None
         }
     }
 
@@ -273,12 +305,12 @@ impl TextBuffer {
             self.set_selection(SelectionMode::Right, 1, false);
         }
 
-        self.update_char_pos_end();
+        self.update_absolute_char_positions();
     }
 
     pub fn get_caret_rect(&mut self) -> Option<D2D1_RECT_F> {
         if self.caret_char_pos < self.absolute_char_pos_start {
-            return None
+            return None;
         }
 
         let mut caret_pos: (f32, f32) = (0.0, 0.0);
@@ -296,10 +328,10 @@ impl TextBuffer {
             let metrics = metrics_uninit.assume_init();
 
             let rect = D2D1_RECT_F {
-                left: self.origin.0 as f32 + caret_pos.0 - self.half_caret_width as f32,
-                top: self.origin.1 as f32 + caret_pos.1,
-                right: self.origin.0 as f32 + caret_pos.0 + (self.caret_width - self.half_caret_width) as f32,
-                bottom: self.origin.1 as f32 + caret_pos.1 + metrics.height
+                left: self.text_origin.0 as f32 + caret_pos.0 - self.half_caret_width as f32,
+                top: self.text_origin.1 as f32 + caret_pos.1,
+                right: self.text_origin.0 as f32 + caret_pos.0 + (self.caret_width - self.half_caret_width) as f32,
+                bottom: self.text_origin.1 as f32 + caret_pos.1 + metrics.height
             };
 
             return Some(rect)
@@ -328,10 +360,10 @@ impl TextBuffer {
             length: (caret_end - caret_begin) as u32
         };
 
-        return Some(range);
+        Some(range)
     }
 
-    pub fn get_layout(&mut self) -> *mut IDWriteTextLayout {
+    pub fn get_text_layout(&mut self) -> *mut IDWriteTextLayout {
         let lines = self.get_current_lines();
 
         unsafe {
@@ -339,41 +371,88 @@ impl TextBuffer {
                 (*self.text_layout).Release();
             }
 
-            dx_ok!((*(*self.renderer.borrow()).write_factory).CreateTextLayout(
+            dx_ok!((*self.renderer.borrow().write_factory).CreateTextLayout(
                 lines.as_ptr(),
                 lines.len() as u32,
-                (*self.renderer.borrow()).text_format,
-                self.pixel_size.0 as f32,
-                self.pixel_size.1 as f32,
+                self.renderer.borrow().text_format,
+                self.text_extents.0 as f32,
+                self.text_extents.1 as f32,
                 &mut self.text_layout as *mut *mut _
             ));
         }
 
-        return self.text_layout;
+
+        self.text_layout
     }
 
-    pub fn resize_layer(&mut self, origin: (u32, u32), size: (u32, u32)) {
-        self.pixel_size = size;
-        self.layer_params = TextRenderer::layer_params(
-            (origin.0 + (*self.renderer.borrow()).line_height as u32, origin.1), 
-            size
-        );
+    pub fn get_number_layout(&mut self) -> *mut IDWriteTextLayout {
 
-        self.update_char_pos_end();
+        // TODO: Optimize
+        let mut nums: String = String::new();
+        for i in self.top_line..(self.bot_line + 1) {
+            nums += i.to_string().as_str();
+            nums += "\r\n";
+        }
+        let lines: Vec<u16> = OsStr::new(nums.as_str()).encode_wide().chain(once(0)).collect();
+
+        unsafe {
+            if !self.numbers_layout.is_null() {
+                (*self.numbers_layout).Release();
+            }
+
+            dx_ok!((*self.renderer.borrow().write_factory).CreateTextLayout(
+                lines.as_ptr(),
+                lines.len() as u32,
+                self.renderer.borrow().text_format,
+                self.numbers_extents.0 as f32,
+                self.numbers_extents.1 as f32,
+                &mut self.numbers_layout as *mut *mut _
+            ));
+        }
+
+        self.numbers_layout
     }
 
-    fn update_char_pos_end(&mut self) {
-        let lines_on_screen = self.pixel_size.1 / ((*self.renderer.borrow()).line_height as u32); 
-        self.absolute_char_pos_end = self.buffer.line_to_char(self.top_line + lines_on_screen as usize);
+    pub fn update_metrics(&mut self, origin: (u32, u32), pixel_size: (u32, u32)) {
+        self.update_text_region(origin, pixel_size);
+        self.update_numbers_region(origin, pixel_size);
+        self.update_text_visible_line_count(pixel_size);
+        self.update_absolute_char_positions();
+    }
+
+    fn update_numbers_visible_digits_count(&mut self) -> usize {
+        0
+    }
+
+    fn update_text_region(&mut self, origin: (u32, u32), pixel_size: (u32, u32)) {
+        self.text_origin = (origin.0 + self.renderer.borrow().font_width as u32 + 5, origin.1);
+        self.text_extents = (pixel_size.0 - self.renderer.borrow().font_width as u32, pixel_size.1);
+        self.text_layer_params = TextRenderer::layer_params(self.text_origin, self.text_extents);
+    }
+
+    fn update_numbers_region(&mut self, origin: (u32, u32), pixel_size: (u32, u32)) {
+        self.numbers_origin = (origin.0, origin.1);
+        self.numbers_extents = (self.renderer.borrow().font_width as u32 + 5, pixel_size.1);
+        self.numbers_layer_params = TextRenderer::layer_params(self.numbers_origin, self.numbers_extents);
+    }
+
+    fn update_text_visible_line_count(&mut self, pixel_size: (u32, u32)) {
+        self.text_visible_line_count = pixel_size.1 as usize / self.renderer.borrow().font_height as usize;
+    }
+
+    fn update_absolute_char_positions(&mut self) {
+        self.bot_line = self.top_line + self.text_visible_line_count;
+        self.absolute_char_pos_start = self.buffer.line_to_char(self.top_line);
+        self.absolute_char_pos_end = self.buffer.line_to_char(self.bot_line);
     }
 
     pub fn get_current_lines(&self) -> Vec<u16> {
-        return self.text_range(self.absolute_char_pos_start..self.absolute_char_pos_end);
+        self.text_range(self.absolute_char_pos_start..self.absolute_char_pos_end)
     }
 
     fn text_range<R>(&self, char_range: R) -> Vec<u16> where R: RangeBounds<usize> {
         let rope_slice = self.buffer.slice(char_range);
-        let chars : Vec<u8> = rope_slice.bytes().collect();
-        return OsStr::new(str::from_utf8(chars.as_ref()).unwrap()).encode_wide().chain(once(0)).collect();
+        let chars: Vec<u8> = rope_slice.bytes().collect();
+        OsStr::new(str::from_utf8(chars.as_ref()).unwrap()).encode_wide().chain(once(0)).collect()
     }
 }

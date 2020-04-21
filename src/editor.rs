@@ -53,24 +53,24 @@ impl Editor {
         self.buffers.push(TextBuffer::new(
                 path, 
                 (0, 0), 
-                ((*self.renderer.borrow()).pixel_size.width, (*self.renderer.borrow()).pixel_size.height), 
+                (self.renderer.borrow().pixel_size.width, self.renderer.borrow().pixel_size.height), 
                 self.renderer.clone())
             );
     }
 
     pub fn draw(&mut self) {
-        (*self.renderer.borrow()).draw(&mut self.buffers[self.buffer_idx], self.caret_is_visible);
+        self.renderer.borrow().draw(&mut self.buffers[self.buffer_idx], self.caret_is_visible);
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
-        (*self.renderer.borrow_mut()).resize(width, height);
+        self.renderer.borrow_mut().resize(width, height);
         for buffer in self.buffers.iter_mut() {
-            buffer.resize_layer((0, 0), ((*self.renderer.borrow()).pixel_size.width, (*self.renderer.borrow()).pixel_size.height));
+            buffer.update_metrics((0, 0), (self.renderer.borrow().pixel_size.width, self.renderer.borrow().pixel_size.height));
         }
     }
 
     pub fn selection_active(&self) -> bool {
-        return self.buffers[self.buffer_idx].currently_selecting;
+        self.buffers[self.buffer_idx].currently_selecting
     }
 
     pub fn execute_command(&mut self, cmd: EditorCommand, data: EditorCommandData) {
@@ -88,16 +88,10 @@ impl Editor {
                 }
             },
             EditorCommand::ScrollUp => {
-                self.buffers[self.buffer_idx].scroll_up(
-                    MOUSEWHEEL_LINES_PER_ROLL, 
-                    (*self.renderer.borrow()).line_height
-                );
+                self.buffers[self.buffer_idx].scroll_up(MOUSEWHEEL_LINES_PER_ROLL);
             },
             EditorCommand::ScrollDown => { 
-                self.buffers[self.buffer_idx].scroll_down(
-                    MOUSEWHEEL_LINES_PER_ROLL, 
-                    (*self.renderer.borrow()).line_height
-                );
+                self.buffers[self.buffer_idx].scroll_down(MOUSEWHEEL_LINES_PER_ROLL);
             },
             EditorCommand::LeftClick => {
                 unsafe {

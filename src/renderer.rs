@@ -45,7 +45,6 @@ use winapi::{
     ctypes::c_void,
     Interface
 };
-
 use crate::buffer::TextBuffer;
 
 #[macro_export]
@@ -89,7 +88,8 @@ pub struct TextRenderer {
 
     pub pixel_size: D2D1_SIZE_U,
     pub font_size: f32,
-    pub line_height: f32,
+    pub font_height: f32,
+    pub font_width: f32,
 
     pub write_factory: *mut IDWriteFactory,
     pub text_format: *mut IDWriteTextFormat,
@@ -101,12 +101,6 @@ pub struct TextRenderer {
 impl TextRenderer {
     pub fn new(hwnd: HWND, font: &str, font_size: f32) -> TextRenderer {
         let mut renderer = TextRenderer {
-            factory: null_mut(),
-            target: null_mut(),
-
-            write_factory: null_mut(),
-            text_format: null_mut(),
-
             brushes: Brushes {
                 text: null_mut(),
                 caret: null_mut(),
@@ -118,7 +112,14 @@ impl TextRenderer {
                 height: 0
             },
             font_size,
-            line_height: 0.0
+            font_height: 0.0,
+            font_width: 0.0,
+                
+            write_factory: null_mut(),
+            text_format: null_mut(),
+
+            factory: null_mut(),
+            target: null_mut()
         };
 
         unsafe {
@@ -240,7 +241,8 @@ impl TextRenderer {
             (*font).GetMetrics(metrics_uninit.as_mut_ptr());
             let metrics = metrics_uninit.assume_init();
 
-            self.line_height = (metrics.glyphBoxTop as f32 / metrics.designUnitsPerEm as f32) * self.font_size;
+            self.font_height = (metrics.glyphBoxTop as f32 / metrics.designUnitsPerEm as f32) * self.font_size;
+            self.font_width = (metrics.glyphBoxRight as f32 / metrics.designUnitsPerEm as f32) * self.font_size;
 
             (*font).Release();
             (*font_collection).Release();
@@ -304,19 +306,34 @@ impl TextRenderer {
             (*self.target).SetTransform(&IDENTITY_MATRIX);
             (*self.target).Clear(&BACKGROUND_COLOR);
 
-            let text_layout: *mut IDWriteTextLayout = text_buffer.get_layout();
+            let number_layout: *mut IDWriteTextLayout = text_buffer.get_number_layout();
 
             // Push the text buffers layer params before drawing
-            (*self.target).PushLayer(&text_buffer.layer_params, null_mut());
+            (*self.target).PushLayer(&text_buffer.numbers_layer_params, null_mut());
+            (*self.target).DrawTextLayout(
+                D2D1_POINT_2F { 
+                    x: text_buffer.numbers_layer_params.contentBounds.left, 
+                    y: text_buffer.numbers_layer_params.contentBounds.top
+                },
+                number_layout,
+                self.brushes.text as *mut ID2D1Brush,
+                D2D1_DRAW_TEXT_OPTIONS_NONE
+            );
+            (*self.target).PopLayer();
+
+            let text_layout: *mut IDWriteTextLayout = text_buffer.get_text_layout();
+
+            // Push the text buffers layer params before drawing
+            (*self.target).PushLayer(&text_buffer.text_layer_params, null_mut());
 
             if let Some(selection_range) = text_buffer.get_selection_range() {
-                self.draw_selection_range(text_buffer.origin, text_layout, selection_range);
+                self.draw_selection_range(text_buffer.text_origin, text_layout, selection_range);
             }
 
             (*self.target).DrawTextLayout(
                 D2D1_POINT_2F { 
-                    x: text_buffer.layer_params.contentBounds.left, 
-                    y: text_buffer.layer_params.contentBounds.top
+                    x: text_buffer.text_layer_params.contentBounds.left, 
+                    y: text_buffer.text_layer_params.contentBounds.top
                 },
                 text_layout,
                 self.brushes.text as *mut ID2D1Brush,

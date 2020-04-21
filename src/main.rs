@@ -26,9 +26,10 @@ use winapi::{
             SetWindowLongPtrW, GetWindowLongPtrW,
             UnregisterClassW, DispatchMessageW,
             TranslateMessage, GetMessageW, SendMessageW, 
-            ShowWindow, CreateWindowExW, 
+            ShowWindow, CreateWindowExW,
             SetProcessDpiAwarenessContext, PostQuitMessage,
             DefWindowProcW, RegisterClassW, LoadCursorW, 
+            SetCapture, ReleaseCapture,
             BeginPaint, EndPaint, GET_WHEEL_DELTA_WPARAM,
             CW_USEDEFAULT, MSG, IDC_ARROW, GetKeyState,
             WM_PAINT, WM_SIZE, WM_DESTROY, WM_CHAR,
@@ -82,15 +83,16 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 
     let shift = (GetKeyState(VK_SHIFT) & 0x80) != 0;
     let ctrl = (GetKeyState(VK_CONTROL) & 0x80) != 0;
+    static DUMMY: bool = false;
 
     match msg {
         WM_CARET_VISIBLE => {
-            (*editor).execute_command(EditorCommand::CaretVisible, EditorCommandData { dummy: false });
+            (*editor).execute_command(EditorCommand::CaretVisible, EditorCommandData { dummy: DUMMY });
             InvalidateRect(hwnd, null_mut(), false as i32);
             return 0;
         },
         WM_CARET_INVISIBLE => {
-            (*editor).execute_command(EditorCommand::CaretInvisible, EditorCommandData { dummy: false });
+            (*editor).execute_command(EditorCommand::CaretInvisible, EditorCommandData { dummy: DUMMY });
             InvalidateRect(hwnd, null_mut(), false as i32);
             return 0;
         },
@@ -123,23 +125,24 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         },
         WM_MOUSEWHEEL => {
             if GET_WHEEL_DELTA_WPARAM(wparam) > 0 {
-                (*editor).execute_command(EditorCommand::ScrollUp, EditorCommandData { dummy: false });
+                (*editor).execute_command(EditorCommand::ScrollUp, EditorCommandData { dummy: DUMMY });
             }
             else {
-                (*editor).execute_command(EditorCommand::ScrollDown, EditorCommandData { dummy: false });
+                (*editor).execute_command(EditorCommand::ScrollDown, EditorCommandData { dummy: DUMMY });
             }
             InvalidateRect(hwnd, null_mut(), false as i32);
             return 0;
         },
         WM_LBUTTONDOWN => {
+            SetCapture(hwnd);
             let mouse_pos = (GET_X_LPARAM(lparam) as f32, GET_Y_LPARAM(lparam) as f32);
             (*editor).execute_command(EditorCommand::LeftClick, EditorCommandData { mouse_pos_shift: (mouse_pos, shift) });
             InvalidateRect(hwnd, null_mut(), false as i32);
             return 0;
         },
         WM_LBUTTONUP => {
-            let mouse_pos = (GET_X_LPARAM(lparam) as f32, GET_Y_LPARAM(lparam) as f32);
-            (*editor).execute_command(EditorCommand::LeftRelease, EditorCommandData { mouse_pos_shift: (mouse_pos, shift) });
+            ReleaseCapture();
+            (*editor).execute_command(EditorCommand::LeftRelease, EditorCommandData { dummy: DUMMY });
             InvalidateRect(hwnd, null_mut(), false as i32);
             return 0;
         },
@@ -202,6 +205,7 @@ fn main() {
         assert!(hwnd != (0 as HWND), "Failed to open window, win32 error code: {}", GetLastError());
 
         ShowWindow(hwnd, SW_SHOW);
+
 
         let mut msg = MaybeUninit::<MSG>::uninit();
 
