@@ -30,7 +30,7 @@ pub struct Editor {
     buffer_idx: usize,
 
     force_visible_caret_timer: u32,
-    pub caret_is_visible: bool
+    caret_is_visible: bool
 }
 
 impl Editor {

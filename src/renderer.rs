@@ -312,25 +312,23 @@ impl TextRenderer {
             (*self.target).SetTransform(&IDENTITY_MATRIX);
             (*self.target).Clear(&BACKGROUND_COLOR);
 
-            let number_layout: *mut IDWriteTextLayout = text_buffer.get_number_layout();
-
             // Push the line numbers layer params before drawing
-            (*self.target).PushLayer(&text_buffer.line_numbers_layer_params, null_mut());
+            let (line_numbers_layout, line_numbers_layer_params) = text_buffer.get_line_numbers_layout();
+            (*self.target).PushLayer(&line_numbers_layer_params, null_mut());
             (*self.target).DrawTextLayout(
                 D2D1_POINT_2F { 
-                    x: text_buffer.line_numbers_layer_params.contentBounds.left, 
-                    y: text_buffer.line_numbers_layer_params.contentBounds.top
+                    x: text_buffer.line_numbers_origin.0 as f32,
+                    y: text_buffer.line_numbers_origin.1 as f32
                 },
-                number_layout,
+                line_numbers_layout,
                 self.brushes.line_number as *mut ID2D1Brush,
                 D2D1_DRAW_TEXT_OPTIONS_NONE
             );
             (*self.target).PopLayer();
 
-            let text_layout: *mut IDWriteTextLayout = text_buffer.get_text_layout();
-
             // Push the text layer params before drawing
-            (*self.target).PushLayer(&text_buffer.text_layer_params, null_mut());
+            let (text_layout, text_layer_params) = text_buffer.get_text_layout();
+            (*self.target).PushLayer(&text_layer_params, null_mut());
 
             if let Some(selection_range) = text_buffer.get_selection_range() {
                 self.draw_selection_range(text_buffer.text_origin, text_layout, selection_range);
@@ -338,8 +336,8 @@ impl TextRenderer {
 
             (*self.target).DrawTextLayout(
                 D2D1_POINT_2F { 
-                    x: text_buffer.text_layer_params.contentBounds.left, 
-                    y: text_buffer.text_layer_params.contentBounds.top
+                    x: text_buffer.text_origin.0 as f32,
+                    y: text_buffer.text_origin.1 as f32
                 },
                 text_layout,
                 self.brushes.text as *mut ID2D1Brush,
@@ -353,7 +351,6 @@ impl TextRenderer {
                     (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
                 }
             }
-
             (*self.target).PopLayer();
 
             (*self.target).EndDraw(null_mut(), null_mut());

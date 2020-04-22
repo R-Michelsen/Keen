@@ -40,23 +40,26 @@ pub enum MouseSelectionMode {
 pub struct TextBuffer {
     buffer: Rope,
 
+    // The layout of the text buffer should be public for
+    // the renderer to use
+    pub origin: (u32, u32),
+    pub extents: (u32, u32),
+    pub text_origin: (u32, u32),
+    pub text_extents: (u32, u32),
+    pub text_visible_line_count: usize,
+    pub line_numbers_origin: (u32, u32),
+    pub line_numbers_extents: (u32, u32),
+    pub line_numbers_margin: u32,
+
+    // The selection state of the buffer should be public
+    // for the editor to use
+    pub currently_selecting: bool,
+
     top_line: usize,
     bot_line: usize,
-
-    origin: (u32, u32),
-    pixel_size: (u32, u32),
-
-    pub text_origin: (u32, u32),
-    text_extents: (u32, u32),
-    text_visible_line_count: usize,
-    line_numbers_origin: (u32, u32),
-    line_numbers_extents: (u32, u32),
-    line_numbers_margin: u32,
-
     absolute_char_pos_start: usize,
     absolute_char_pos_end: usize,
 
-    pub currently_selecting: bool,
     caret_char_anchor: usize,
     caret_char_pos: usize,
     caret_is_trailing: i32,
@@ -65,17 +68,17 @@ pub struct TextBuffer {
 
     cached_mouse_width: f32,
 
-    pub text_layer_params: D2D1_LAYER_PARAMETERS,
+    text_layer_params: D2D1_LAYER_PARAMETERS,
     text_layout: *mut IDWriteTextLayout,
 
-    pub line_numbers_layer_params: D2D1_LAYER_PARAMETERS,
+    line_numbers_layer_params: D2D1_LAYER_PARAMETERS,
     line_numbers_layout: *mut IDWriteTextLayout,
 
     renderer: Rc<RefCell<TextRenderer>>
 }
 
 impl TextBuffer {
-    pub fn new(path: &str, origin: (u32, u32), pixel_size: (u32, u32), renderer: Rc<RefCell<TextRenderer>>) -> TextBuffer {
+    pub fn new(path: &str, origin: (u32, u32), extents: (u32, u32), renderer: Rc<RefCell<TextRenderer>>) -> TextBuffer {
         let file = File::open(path).unwrap();
         let buffer = Rope::from_reader(file).unwrap();
 
@@ -89,12 +92,8 @@ impl TextBuffer {
         let mut text_buffer = TextBuffer {
             buffer,
 
-            top_line: 0,
-            bot_line: 0,
-
             origin,
-            pixel_size,
-
+            extents,
             text_origin: (0, 0),
             text_extents: (0, 0),
             text_visible_line_count: 0,
@@ -102,10 +101,13 @@ impl TextBuffer {
             line_numbers_extents: (0, 0),
             line_numbers_margin: 0,
 
+            currently_selecting: false,
+
+            top_line: 0,
+            bot_line: 0,
             absolute_char_pos_start: 0,
             absolute_char_pos_end: 0,
 
-            currently_selecting: false,
             caret_char_anchor: 0,
             caret_char_pos: 0,
             caret_is_trailing: 0,
@@ -123,7 +125,7 @@ impl TextBuffer {
             renderer
         };
 
-        text_buffer.update_metrics(origin, pixel_size);
+        text_buffer.update_metrics(origin, extents);
         text_buffer
     }
 
@@ -366,7 +368,7 @@ impl TextBuffer {
         Some(range)
     }
 
-    pub fn get_text_layout(&mut self) -> *mut IDWriteTextLayout {
+    pub fn get_text_layout(&mut self) -> (*mut IDWriteTextLayout, D2D1_LAYER_PARAMETERS) {
         let lines = self.get_current_lines();
 
         unsafe {
@@ -384,11 +386,10 @@ impl TextBuffer {
             ));
         }
 
-
-        self.text_layout
+        (self.text_layout, self.text_layer_params)
     }
 
-    pub fn get_number_layout(&mut self) -> *mut IDWriteTextLayout {
+    pub fn get_line_numbers_layout(&mut self) -> (*mut IDWriteTextLayout, D2D1_LAYER_PARAMETERS) {
         let mut nums: String = String::new();
         let number_range_end = min(self.buffer.len_lines() - 1, self.bot_line);
 
@@ -413,12 +414,12 @@ impl TextBuffer {
             ));
         }
 
-        self.line_numbers_layout
+        (self.line_numbers_layout, self.line_numbers_layer_params)
     }
 
-    pub fn update_metrics(&mut self, origin: (u32, u32), pixel_size: (u32, u32)) {
+    pub fn update_metrics(&mut self, origin: (u32, u32), extents: (u32, u32)) {
         self.origin = origin;
-        self.pixel_size = pixel_size;
+        self.extents = extents;
 
         self.update_line_numbers_margin();
         self.update_text_region();
@@ -439,8 +440,8 @@ impl TextBuffer {
             self.origin.1
         );
         self.text_extents = (
-            self.pixel_size.0 - self.line_numbers_margin,
-            self.pixel_size.1
+            self.extents.0 - self.line_numbers_margin,
+            self.extents.1
         );
         self.text_layer_params = TextRenderer::layer_params(self.text_origin, self.text_extents);
     }
@@ -449,7 +450,7 @@ impl TextBuffer {
         self.line_numbers_origin = (self.origin.0, self.origin.1);
         self.line_numbers_extents = (
             self.line_numbers_margin,
-            self.pixel_size.1
+            self.extents.1
         );
         self.line_numbers_layer_params = TextRenderer::layer_params(
             self.line_numbers_origin, 
@@ -458,7 +459,7 @@ impl TextBuffer {
     }
 
     fn update_text_visible_line_count(&mut self) {
-        let max_lines_in_text_region = self.pixel_size.1 as usize / self.renderer.borrow().font_height as usize;
+        let max_lines_in_text_region = self.extents.1 as usize / self.renderer.borrow().font_height as usize;
         self.text_visible_line_count = min(self.buffer.len_lines(), max_lines_in_text_region);
     }
 
