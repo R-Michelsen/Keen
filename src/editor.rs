@@ -7,24 +7,21 @@ use crate::buffer::{TextBuffer, SelectionMode, MouseSelectionMode};
 
 const MOUSEWHEEL_LINES_PER_ROLL: usize = 3;
 
+type MousePos = (f32, f32);
+type ShiftDown = bool;
+type CtrlDown = bool;
+
 #[derive(PartialEq)]
 pub enum EditorCommand {
     CaretVisible,
     CaretInvisible,
     ScrollUp,
     ScrollDown,
-    LeftClick,
+    LeftClick(MousePos, ShiftDown),
     LeftRelease,
-    MouseMove,
-    KeyPressed,
-    CharInsert
-}
-
-pub union EditorCommandData {
-    pub dummy: bool,
-    pub character: u16,
-    pub key_shift_ctrl: (i32, bool, bool),
-    pub mouse_pos_shift: ((f32, f32), bool),
+    MouseMove(MousePos),
+    KeyPressed(i32, ShiftDown, CtrlDown),
+    CharInsert(u16)
 }
 
 pub struct Editor {
@@ -73,7 +70,7 @@ impl Editor {
         self.buffers[self.buffer_idx].currently_selecting
     }
 
-    pub fn execute_command(&mut self, cmd: EditorCommand, data: EditorCommandData) {
+    pub fn execute_command(&mut self, cmd: EditorCommand) {
         match cmd {
             EditorCommand::CaretVisible | EditorCommand::CaretInvisible => {
                 if self.force_visible_caret_timer > 0 {
@@ -93,35 +90,26 @@ impl Editor {
             EditorCommand::ScrollDown => { 
                 self.buffers[self.buffer_idx].scroll_down(MOUSEWHEEL_LINES_PER_ROLL);
             },
-            EditorCommand::LeftClick => {
-                unsafe {
-                    let (mouse_pos, shift) = data.mouse_pos_shift;
-                    self.buffers[self.buffer_idx].left_click(mouse_pos, shift);
-                    self.force_visible_caret_timer = 1;
-                }
+            EditorCommand::LeftClick(mouse_pos, shift_down) => {
+                self.buffers[self.buffer_idx].left_click(mouse_pos, shift_down);
+                self.force_visible_caret_timer = 1;
             },
             EditorCommand::LeftRelease => self.buffers[self.buffer_idx].left_release(),
-            EditorCommand::MouseMove => {
-                unsafe {
-                    let (mouse_pos, _) = data.mouse_pos_shift;
-                    self.buffers[self.buffer_idx].set_mouse_selection(MouseSelectionMode::Move, mouse_pos);
-                }
+            EditorCommand::MouseMove(mouse_pos) => {
+                self.buffers[self.buffer_idx].set_mouse_selection(MouseSelectionMode::Move, mouse_pos);
             },
-            EditorCommand::KeyPressed => { 
-                unsafe {
-                    let (key, shift, ctrl) = data.key_shift_ctrl;
-                    match key {
-                        VK_LEFT => self.buffers[self.buffer_idx].set_selection(SelectionMode::Left, 1, shift),
-                        VK_RIGHT => self.buffers[self.buffer_idx].set_selection(SelectionMode::Right, 1, shift),
-                        VK_DOWN => self.buffers[self.buffer_idx].set_selection(SelectionMode::Down, 1, shift),
-                        VK_UP => self.buffers[self.buffer_idx].set_selection(SelectionMode::Up, 1, shift),
-                        _ => {}
-                    }
-                    self.force_visible_caret_timer = 1;
+            EditorCommand::KeyPressed(key, shift_down, ctrl_down) => { 
+                match key {
+                    VK_LEFT => self.buffers[self.buffer_idx].set_selection(SelectionMode::Left, 1, shift_down),
+                    VK_RIGHT => self.buffers[self.buffer_idx].set_selection(SelectionMode::Right, 1, shift_down),
+                    VK_DOWN => self.buffers[self.buffer_idx].set_selection(SelectionMode::Down, 1, shift_down),
+                    VK_UP => self.buffers[self.buffer_idx].set_selection(SelectionMode::Up, 1, shift_down),
+                    _ => {}
                 }
+                self.force_visible_caret_timer = 1;
             }
-            EditorCommand::CharInsert => {
-                self.buffers[self.buffer_idx].insert_char(unsafe { data.character });
+            EditorCommand::CharInsert(character) => {
+                self.buffers[self.buffer_idx].insert_char(character);
             }
         }
     }

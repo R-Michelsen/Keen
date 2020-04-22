@@ -133,7 +133,7 @@ impl TextBuffer {
 
     pub fn scroll_down(&mut self, delta: usize) {
         let new_top = self.top_line + delta;
-        if new_top > self.buffer.len_lines() {
+        if new_top >= self.buffer.len_lines() {
             self.top_line = self.buffer.len_lines() - 1;
         }
         else {
@@ -145,6 +145,9 @@ impl TextBuffer {
     pub fn scroll_up(&mut self, delta: usize) {
         if self.top_line >= delta {
             self.top_line -= delta;
+        }
+        else {
+            self.top_line = 0;
         }
         self.update_absolute_char_positions();
     }

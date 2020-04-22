@@ -58,7 +58,7 @@ use winapi::{
     ctypes::c_void
 };
 
-use editor::{Editor, EditorCommand, EditorCommandData};
+use editor::{ Editor, EditorCommand };
 
 const WM_CARET_VISIBLE: u32 = 0xC000;
 const WM_CARET_INVISIBLE: u32 = 0xC001;
@@ -81,18 +81,17 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         editor = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Editor;
     }
 
-    let shift = (GetKeyState(VK_SHIFT) & 0x80) != 0;
-    let ctrl = (GetKeyState(VK_CONTROL) & 0x80) != 0;
-    static DUMMY: bool = false;
+    let shift_down = (GetKeyState(VK_SHIFT) & 0x80) != 0;
+    let ctrl_down = (GetKeyState(VK_CONTROL) & 0x80) != 0;
 
     match msg {
         WM_CARET_VISIBLE => {
-            (*editor).execute_command(EditorCommand::CaretVisible, EditorCommandData { dummy: DUMMY });
+            (*editor).execute_command(EditorCommand::CaretVisible);
             InvalidateRect(hwnd, null_mut(), false as i32);
             return 0;
         },
         WM_CARET_INVISIBLE => {
-            (*editor).execute_command(EditorCommand::CaretInvisible, EditorCommandData { dummy: DUMMY });
+            (*editor).execute_command(EditorCommand::CaretInvisible);
             InvalidateRect(hwnd, null_mut(), false as i32);
             return 0;
         },
@@ -119,16 +118,16 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         },
         WM_CHAR => {
             if wparam >= 0x20 || wparam == 0x9 {
-                (*editor).execute_command(EditorCommand::CharInsert, EditorCommandData { character: wparam as u16 });
+                (*editor).execute_command(EditorCommand::CharInsert(wparam as u16));
             }
             return 0;
         },
         WM_MOUSEWHEEL => {
             if GET_WHEEL_DELTA_WPARAM(wparam) > 0 {
-                (*editor).execute_command(EditorCommand::ScrollUp, EditorCommandData { dummy: DUMMY });
+                (*editor).execute_command(EditorCommand::ScrollUp);
             }
             else {
-                (*editor).execute_command(EditorCommand::ScrollDown, EditorCommandData { dummy: DUMMY });
+                (*editor).execute_command(EditorCommand::ScrollDown);
             }
             InvalidateRect(hwnd, null_mut(), false as i32);
             return 0;
@@ -136,24 +135,24 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         WM_LBUTTONDOWN => {
             SetCapture(hwnd);
             let mouse_pos = (GET_X_LPARAM(lparam) as f32, GET_Y_LPARAM(lparam) as f32);
-            (*editor).execute_command(EditorCommand::LeftClick, EditorCommandData { mouse_pos_shift: (mouse_pos, shift) });
+            (*editor).execute_command(EditorCommand::LeftClick(mouse_pos, shift_down));
             InvalidateRect(hwnd, null_mut(), false as i32);
             return 0;
         },
         WM_LBUTTONUP => {
             ReleaseCapture();
-            (*editor).execute_command(EditorCommand::LeftRelease, EditorCommandData { dummy: DUMMY });
+            (*editor).execute_command(EditorCommand::LeftRelease);
             InvalidateRect(hwnd, null_mut(), false as i32);
             return 0;
         },
         WM_KEYDOWN => {
-            (*editor).execute_command(EditorCommand::KeyPressed, EditorCommandData { key_shift_ctrl: (wparam as i32, shift, ctrl) });
+            (*editor).execute_command(EditorCommand::KeyPressed(wparam as i32, shift_down, ctrl_down));
             InvalidateRect(hwnd, null_mut(), false as i32);
             return 0;
         },
         WM_MOUSEMOVE => {
             let mouse_pos = (GET_X_LPARAM(lparam) as f32, GET_Y_LPARAM(lparam) as f32);
-            (*editor).execute_command(EditorCommand::MouseMove, EditorCommandData { mouse_pos_shift: (mouse_pos, shift) });
+            (*editor).execute_command(EditorCommand::MouseMove(mouse_pos));
             if (*editor).selection_active() {
                 InvalidateRect(hwnd, null_mut(), false as i32);
             }
