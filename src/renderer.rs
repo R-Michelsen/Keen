@@ -43,6 +43,8 @@ use winapi::{
     ctypes::c_void,
     Interface
 };
+
+use crate::settings;
 use crate::buffer::TextBuffer;
 
 #[macro_export]
@@ -72,10 +74,10 @@ const LINE_NUMBER_COLOR: D3DCOLORVALUE = D3DCOLORVALUE {
     r: 0.7, g: 0.60, b: 0.50, a: 1.0
 };
 const CARET_COLOR: D3DCOLORVALUE = D3DCOLORVALUE {
-    r: 1.0, g: 0.95, b: 0.89, a: 1.0
+    r: 1.0, g: 1.0, b: 1.0, a: 1.0
 };
 const SELECTION_COLOR: D3DCOLORVALUE = D3DCOLORVALUE {
-    r: 0.45, g: 0.76, b: 0.98, a: 1.0
+    r: 0.45, g: 0.66, b: 0.78, a: 1.0
 };
 
 struct Brushes {
@@ -253,6 +255,8 @@ impl TextRenderer {
 
             self.font_width = metrics.width;
             self.font_height = metrics.height;
+
+            dx_ok!((*self.text_format).SetIncrementalTabStop(self.font_width * settings::NUMBER_OF_SPACES_PER_TAB as f32));
         }
     }
 

@@ -1,11 +1,14 @@
-use std::{str, rc::Rc, cell::RefCell};
+use std::{
+    str, 
+    rc::Rc, 
+    cell::RefCell 
+};
 use winapi::shared::windef::HWND;
-use winapi::um::winuser::{VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN};
+use winapi::um::winuser::{ VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_TAB, VK_RETURN, VK_DELETE, VK_BACK };
 
 use crate::renderer::TextRenderer;
-use crate::buffer::{TextBuffer, SelectionMode, MouseSelectionMode};
-
-const MOUSEWHEEL_LINES_PER_ROLL: usize = 3;
+use crate::buffer::{ TextBuffer, SelectionMode, MouseSelectionMode };
+use crate::settings;
 
 type MousePos = (f32, f32);
 type ShiftDown = bool;
@@ -47,12 +50,14 @@ impl Editor {
 
 
     pub fn open_file(&mut self, path: &str) {
-        self.buffers.push(TextBuffer::new(
+        self.buffers.push(
+            TextBuffer::new(
                 path, 
                 (0, 0), 
                 (self.renderer.borrow().pixel_size.width, self.renderer.borrow().pixel_size.height), 
-                self.renderer.clone())
-            );
+                self.renderer.clone()
+            )
+        );
     }
 
     pub fn draw(&mut self) {
@@ -72,23 +77,17 @@ impl Editor {
 
     pub fn execute_command(&mut self, cmd: EditorCommand) {
         match cmd {
-            EditorCommand::CaretVisible | EditorCommand::CaretInvisible => {
-                if self.force_visible_caret_timer > 0 {
+            EditorCommand::CaretVisible | EditorCommand::CaretInvisible if self.force_visible_caret_timer > 0 => {
                     self.force_visible_caret_timer = self.force_visible_caret_timer.saturating_sub(1);
                     self.caret_is_visible = true;
-                }
-                else if cmd == EditorCommand::CaretVisible {
-                    self.caret_is_visible = true;
-                }
-                else {
-                    self.caret_is_visible = false;
-                }
             },
+            EditorCommand::CaretVisible => self.caret_is_visible = true,
+            EditorCommand::CaretInvisible => self.caret_is_visible = false,
             EditorCommand::ScrollUp => {
-                self.buffers[self.buffer_idx].scroll_up(MOUSEWHEEL_LINES_PER_ROLL);
+                self.buffers[self.buffer_idx].scroll_up();
             },
             EditorCommand::ScrollDown => { 
-                self.buffers[self.buffer_idx].scroll_down(MOUSEWHEEL_LINES_PER_ROLL);
+                self.buffers[self.buffer_idx].scroll_down();
             },
             EditorCommand::LeftClick(mouse_pos, shift_down) => {
                 self.buffers[self.buffer_idx].left_click(mouse_pos, shift_down);
@@ -100,16 +99,21 @@ impl Editor {
             },
             EditorCommand::KeyPressed(key, shift_down, ctrl_down) => { 
                 match key {
-                    VK_LEFT => self.buffers[self.buffer_idx].set_selection(SelectionMode::Left, 1, shift_down),
-                    VK_RIGHT => self.buffers[self.buffer_idx].set_selection(SelectionMode::Right, 1, shift_down),
+                    VK_LEFT => self.buffers[self.buffer_idx].move_left(shift_down),
+                    VK_RIGHT => self.buffers[self.buffer_idx].move_right(shift_down),
                     VK_DOWN => self.buffers[self.buffer_idx].set_selection(SelectionMode::Down, 1, shift_down),
                     VK_UP => self.buffers[self.buffer_idx].set_selection(SelectionMode::Up, 1, shift_down),
+                    VK_TAB => self.buffers[self.buffer_idx].insert_chars(" ".repeat(settings::NUMBER_OF_SPACES_PER_TAB).as_str()),
+                    VK_RETURN => self.buffers[self.buffer_idx].insert_chars("\r\n"),
+                    VK_DELETE => self.buffers[self.buffer_idx].delete_char(),
+                    VK_BACK => self.buffers[self.buffer_idx].delete_previous_char(),
                     _ => {}
                 }
                 self.force_visible_caret_timer = 1;
             }
             EditorCommand::CharInsert(character) => {
                 self.buffers[self.buffer_idx].insert_char(character);
+                self.force_visible_caret_timer = 1;
             }
         }
     }

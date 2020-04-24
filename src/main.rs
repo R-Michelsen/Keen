@@ -5,6 +5,7 @@
 mod editor;
 mod renderer;
 mod buffer;
+mod settings;
 
 use std::{
     ffi::OsStr,
@@ -76,6 +77,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, (*uninit_editor).as_mut_ptr() as isize);
         editor = (*uninit_editor).as_mut_ptr();
         (*editor).open_file("C:/llvm-project/clang/include/clang/CodeGen/CGFunctionInfo.h");
+        //(*editor).open_file("C:/Users/Rasmus/Desktop/keen/src/editor.rs");
     }
     else {
         editor = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Editor;
@@ -117,7 +119,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             return 0;
         },
         WM_CHAR => {
-            if wparam >= 0x20 || wparam == 0x9 {
+            if wparam >= 0x20 {
                 (*editor).execute_command(EditorCommand::CharInsert(wparam as u16));
             }
             return 0;

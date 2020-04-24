@@ -1,27 +1,29 @@
 use core::ops::RangeBounds;
 use std::{
     cell::RefCell,
-    cmp::min,
+    cmp::{ min, max },
     fs::File,
     ffi::OsStr,
     iter::once,
     os::windows::ffi::OsStrExt,
     ptr::null_mut,
-    mem::{swap, MaybeUninit},
+    mem::{ swap, MaybeUninit },
     rc::Rc,
+    char,
     str
 };
 use winapi::{
     um::{
-        dwrite::{IDWriteTextLayout, DWRITE_HIT_TEST_METRICS, DWRITE_TEXT_RANGE},
-        d2d1::{D2D1_RECT_F, D2D1_LAYER_PARAMETERS},
-        winuser::{SystemParametersInfoW, SPI_GETCARETWIDTH}
+        dwrite::{ IDWriteTextLayout, DWRITE_HIT_TEST_METRICS, DWRITE_TEXT_RANGE },
+        d2d1::{ D2D1_RECT_F, D2D1_LAYER_PARAMETERS },
+        winuser::{ SystemParametersInfoW, SPI_GETCARETWIDTH }
     },
     ctypes::c_void
 };
 use ropey::Rope;
 
 use crate::dx_ok;
+use crate::settings;
 use crate::renderer::TextRenderer;
 
 #[derive(PartialEq)]
@@ -66,7 +68,7 @@ pub struct TextBuffer {
     caret_width: u32,
     half_caret_width: u32,
 
-    cached_mouse_width: f32,
+    cached_char_offset: u32,
 
     text_layer_params: D2D1_LAYER_PARAMETERS,
     text_layout: *mut IDWriteTextLayout,
@@ -86,7 +88,7 @@ impl TextBuffer {
         unsafe {
             // We'll increase the width from the system width slightly
             SystemParametersInfoW(SPI_GETCARETWIDTH, 0, (&mut caret_width as *mut _) as *mut c_void, 0);
-            caret_width *= 2;
+            caret_width *= 3;
         }
 
         let mut text_buffer = TextBuffer {
@@ -114,7 +116,7 @@ impl TextBuffer {
             caret_width,
             half_caret_width: caret_width / 2,
 
-            cached_mouse_width: 0.0,
+            cached_char_offset: 0,
 
             text_layer_params: unsafe { MaybeUninit::<D2D1_LAYER_PARAMETERS>::zeroed().assume_init() },
             text_layout: null_mut(),
@@ -133,8 +135,8 @@ impl TextBuffer {
         self.caret_char_pos + (self.caret_is_trailing as usize)
     }
 
-    pub fn scroll_down(&mut self, delta: usize) {
-        let new_top = self.top_line + delta;
+    pub fn scroll_down(&mut self) {
+        let new_top = self.top_line + settings::MOUSEWHEEL_LINES_PER_ROLL;
         if new_top >= self.buffer.len_lines() {
             self.top_line = self.buffer.len_lines() - 1;
         }
@@ -144,14 +146,30 @@ impl TextBuffer {
         self.update_absolute_char_positions();
     }
 
-    pub fn scroll_up(&mut self, delta: usize) {
-        if self.top_line >= delta {
-            self.top_line -= delta;
+    pub fn scroll_up(&mut self) {
+        if self.top_line >= settings::MOUSEWHEEL_LINES_PER_ROLL {
+            self.top_line -= settings::MOUSEWHEEL_LINES_PER_ROLL;
         }
         else {
             self.top_line = 0;
         }
         self.update_absolute_char_positions();
+    } 
+
+    pub fn move_left(&mut self, shift_down: bool) {
+        let mut count = 1;
+        if self.see_prev_chars("\r\n") {
+            count = 2;
+        }
+        self.set_selection(SelectionMode::Left, count, shift_down);
+    }
+
+    pub fn move_right(&mut self, shift_down: bool) {
+        let mut count = 1;
+        if self.see_chars("\r\n") {
+            count = 2;
+        }
+        self.set_selection(SelectionMode::Right, count, shift_down);
     }
 
     pub fn left_click(&mut self, mouse_pos: (f32, f32), extend_current_selection: bool) {
@@ -162,11 +180,35 @@ impl TextBuffer {
         self.currently_selecting = true;
 
         // Reset the cached width
-        self.cached_mouse_width = 0.0;
+        self.cached_char_offset = 0;
     }
 
     pub fn left_release(&mut self) {
         self.currently_selecting = false;
+    }
+
+    fn linebreaks_before_line(&self, line: usize) -> usize {
+        let mut line_start = self.buffer.chars_at(self.buffer.line_to_char(line));
+        match line_start.prev() {
+            Some('\n') => {
+                if line_start.prev() == Some('\r') {
+                    return 2;
+                }
+                else {
+                    return 1;
+                }
+            },
+
+            // For completeness, we will count all linebreaks
+            // that ropey supports
+            Some('\u{000B}') => 1,
+            Some('\u{000C}') => 1,
+            Some('\u{000D}') => 1,
+            Some('\u{0085}') => 1,
+            Some('\u{2028}') => 1,
+            Some('\u{2029}') => 1,
+            _ => 0
+        }
     }
 
     pub fn set_selection(&mut self, mode: SelectionMode, count: usize, extend_current_selection: bool) {
@@ -175,50 +217,63 @@ impl TextBuffer {
         match mode {
             SelectionMode::Left | SelectionMode::Right => {
                 self.caret_char_pos = caret_absolute_pos;
-                if self.caret_char_pos > 0 {
-                    if mode == SelectionMode::Left {
+
+                if mode == SelectionMode::Left {
+                    if self.caret_char_pos > 0 {
                         self.caret_char_pos -= count;
                     }
-                    else {
+                }
+                else {
+                    if self.caret_char_pos < self.buffer.len_chars() {
                         self.caret_char_pos += count;
                     }
-                    self.caret_is_trailing = 0;
-
-                    // Reset the cached width
-                    self.cached_mouse_width = 0.0;
                 }
+                self.caret_is_trailing = 0;
+
+                // Reset the cached width
+                self.cached_char_offset = 0;
             },
-            SelectionMode::Down | SelectionMode::Up => {
-                let mut caret_pos: (f32, f32) = (0.0, 0.0);
-                let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
+            SelectionMode::Up => {
+                let current_line = self.buffer.char_to_line(caret_absolute_pos);
 
-                unsafe {
-                    dx_ok!((*self.text_layout).HitTestTextPosition(
-                        (self.caret_char_pos - self.absolute_char_pos_start) as u32,
-                        self.caret_is_trailing,
-                        &mut caret_pos.0,
-                        &mut caret_pos.1,
-                        metrics_uninit.as_mut_ptr()
-                    ));
-
-                    let metrics = metrics_uninit.assume_init();
-
-                    if caret_pos.0 < self.cached_mouse_width {
-                        caret_pos.0 = self.cached_mouse_width;
-                    }
-                    else {
-                        self.cached_mouse_width = caret_pos.0;
-                    }
-
-                    if mode == SelectionMode::Down {
-                        caret_pos.1 += metrics.height * count as f32;
-                    }
-                    else {
-                        caret_pos.1 -= metrics.height * count as f32
-                    }
-                    
-                    self.set_mouse_selection(MouseSelectionMode::Click, caret_pos);
+                // If we're on the first line, return
+                if current_line == 0 {
+                    return;
                 }
+                let above_line = self.buffer.line(current_line - 1);
+                let linebreaks_after_above_line = self.linebreaks_before_line(current_line);
+
+                let current_offset = caret_absolute_pos - self.buffer.line_to_char(current_line);
+
+                let desired_offset = max(self.cached_char_offset, current_offset as u32);
+                self.cached_char_offset = desired_offset;
+
+                let above_line_char_length = above_line.len_chars().saturating_sub(linebreaks_after_above_line);
+                let new_offset = min(above_line_char_length, desired_offset as usize);
+
+                self.caret_char_pos = self.buffer.line_to_char(current_line - 1) + new_offset;
+                self.caret_is_trailing = 0;
+            },
+            SelectionMode::Down => {
+                let current_line = self.buffer.char_to_line(caret_absolute_pos);
+
+                // If we're on the last line, return
+                if current_line == self.buffer.len_lines() - 1 {
+                    return;
+                }
+                let below_line = self.buffer.line(current_line + 1); 
+                let linebreaks_after_current_line = self.linebreaks_before_line(current_line + 1);
+
+                let current_offset = caret_absolute_pos - self.buffer.line_to_char(current_line);
+
+                let desired_offset = max(self.cached_char_offset, current_offset as u32);
+                self.cached_char_offset = desired_offset;
+
+                let below_line_char_length = below_line.len_chars().saturating_sub(linebreaks_after_current_line);
+                let new_offset = min(below_line_char_length, desired_offset as usize);
+
+                self.caret_char_pos = self.buffer.line_to_char(current_line + 1) + new_offset;
+                self.caret_is_trailing = 0;
             },
         }
 
@@ -248,6 +303,7 @@ impl TextBuffer {
 
                     let metrics = metrics_uninit.assume_init();
                     let absolute_text_pos = metrics.textPosition as usize;
+
                     self.caret_char_pos = self.absolute_char_pos_start + absolute_text_pos;
                 }
             },
@@ -270,6 +326,7 @@ impl TextBuffer {
 
                         let metrics = metrics_uninit.assume_init();
                         let absolute_text_pos = metrics.textPosition as usize;
+
                         self.caret_char_pos = self.absolute_char_pos_start + absolute_text_pos;
                     }
                 }
@@ -283,33 +340,117 @@ impl TextBuffer {
         (dx, dy)
     }
 
-    pub fn insert_char(&mut self, character: u16) {
+    fn translate_relative_mouse_pos_to_absolute(&self, mouse_pos: (f32, f32)) -> (f32, f32) {
+        let dx = mouse_pos.0 + self.text_origin.0 as f32;
+        let dy = mouse_pos.1 + self.text_origin.1 as f32;
+        (dx, dy)
+    }
+
+    pub fn delete_selection(&mut self) {
         let caret_absolute_pos = self.get_caret_absolute_pos();
         if caret_absolute_pos != self.caret_char_anchor {
-            let diff;
             if caret_absolute_pos < self.caret_char_anchor {
                 self.buffer.remove(caret_absolute_pos..self.caret_char_anchor);
-                diff = self.caret_char_anchor - caret_absolute_pos;
+                self.caret_char_pos = caret_absolute_pos;
+                self.caret_char_anchor = self.caret_char_pos;
             }
             else {
                 self.buffer.remove(self.caret_char_anchor..caret_absolute_pos);
-                diff = caret_absolute_pos - self.caret_char_anchor;
+                let caret_anchor_delta = caret_absolute_pos - self.caret_char_anchor;
+                self.caret_char_pos = caret_absolute_pos - caret_anchor_delta;
             }
-            self.caret_char_pos = caret_absolute_pos - diff;
             self.caret_is_trailing = 0;
-            self.caret_char_anchor -= diff;
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.caret_char_anchor = self.caret_char_pos;
+    }
+
+    pub fn insert_chars(&mut self, chars: &str) {
+        self.delete_selection();
+
+        self.buffer.insert(self.get_caret_absolute_pos(), chars);
+        self.set_selection(SelectionMode::Right, chars.len(), false);
+
+        self.update_absolute_char_positions();
+    }
+
+    pub fn insert_char(&mut self, character: u16) {
+        self.delete_selection();
+
+        self.buffer.insert_char(self.get_caret_absolute_pos(), (character as u8) as char);
+        self.set_selection(SelectionMode::Right, 1, false);
+
+        self.update_absolute_char_positions();
+    }
+
+    fn see_chars(&mut self, string: &str) -> bool {
+        let mut rope_iterator = self.buffer.chars_at(self.get_caret_absolute_pos());
+        for chr in string.chars() {
+            match rope_iterator.next() {
+                Some(x) if x == chr => continue,
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    fn see_prev_chars(&mut self, string: &str) -> bool {
+        let mut rope_iterator = self.buffer.chars_at(self.get_caret_absolute_pos());
+        for chr in string.chars().rev() {
+            match rope_iterator.prev() {
+                Some(x) if x == chr => continue,
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    pub fn delete_char(&mut self) {
+        let caret_absolute_pos = min(self.get_caret_absolute_pos(), self.buffer.len_chars());
+
+        // If we are currently selecting text, 
+        // simply delete the selected text
+        if caret_absolute_pos != self.caret_char_anchor {
+            self.delete_selection();
+            return;
         }
 
-        // Insert 4 spaces in place of <TAB>
-        if character == 0x9 {
-            self.buffer.insert(self.get_caret_absolute_pos(), "    ");
-            self.set_selection(SelectionMode::Right, 4, false);
-        }
-        else {
-            self.buffer.insert_char(self.get_caret_absolute_pos(), (character as u8) as char);
-            self.set_selection(SelectionMode::Right, 1, false);
+        // In case of a CRLF, delete both characters
+        let mut offset = 1;
+        if self.see_chars("\r\n") {
+            offset = 2;
         }
 
+        let next_char_pos = min(caret_absolute_pos + offset, self.buffer.len_chars());
+        self.buffer.remove(caret_absolute_pos..next_char_pos);
+
+        self.clear_selection();
+        self.update_absolute_char_positions();
+    }
+
+    pub fn delete_previous_char(&mut self) {
+        let caret_absolute_pos = min(self.get_caret_absolute_pos(), self.buffer.len_chars());
+
+        // If we are currently selecting text, 
+        // simply delete the selected text
+        if caret_absolute_pos != self.caret_char_anchor {
+            self.delete_selection();
+            return;
+        }
+
+        // In case of a CRLF, delete both characters
+        let mut offset = 1;
+        if self.see_prev_chars("\r\n") {
+            offset = 2;
+        }
+
+        let previous_char_pos = caret_absolute_pos.saturating_sub(offset);
+        self.buffer.remove(previous_char_pos..caret_absolute_pos);
+        self.set_selection(SelectionMode::Left, offset, false);
+
+        self.clear_selection();
         self.update_absolute_char_positions();
     }
 
