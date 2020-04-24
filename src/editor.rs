@@ -75,6 +75,16 @@ impl Editor {
         self.buffers[self.buffer_idx].currently_selecting
     }
 
+    fn force_caret_visible(&mut self) {
+        if self.caret_is_visible {
+            self.force_visible_caret_timer = 1;
+        }
+        else {
+            self.caret_is_visible = true;
+            self.force_visible_caret_timer = 2;
+        }
+    }
+
     pub fn execute_command(&mut self, cmd: EditorCommand) {
         match cmd {
             EditorCommand::CaretVisible | EditorCommand::CaretInvisible if self.force_visible_caret_timer > 0 => {
@@ -91,7 +101,7 @@ impl Editor {
             },
             EditorCommand::LeftClick(mouse_pos, shift_down) => {
                 self.buffers[self.buffer_idx].left_click(mouse_pos, shift_down);
-                self.force_visible_caret_timer = 1;
+                self.force_caret_visible();
             },
             EditorCommand::LeftRelease => self.buffers[self.buffer_idx].left_release(),
             EditorCommand::MouseMove(mouse_pos) => {
@@ -109,11 +119,11 @@ impl Editor {
                     VK_BACK => self.buffers[self.buffer_idx].delete_previous_char(),
                     _ => {}
                 }
-                self.force_visible_caret_timer = 1;
+                self.force_caret_visible();
             }
             EditorCommand::CharInsert(character) => {
                 self.buffers[self.buffer_idx].insert_char(character);
-                self.force_visible_caret_timer = 1;
+                self.force_caret_visible();
             }
         }
     }

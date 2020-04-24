@@ -34,6 +34,7 @@ pub enum SelectionMode {
     Up
 }
 
+#[derive(PartialEq)]
 pub enum MouseSelectionMode {
     Click,
     Move
@@ -233,46 +234,38 @@ impl TextBuffer {
                 // Reset the cached width
                 self.cached_char_offset = 0;
             },
-            SelectionMode::Up => {
+            SelectionMode::Up | SelectionMode::Down => {
                 let current_line = self.buffer.char_to_line(caret_absolute_pos);
 
-                // If we're on the first line, return
-                if current_line == 0 {
-                    return;
+                let target_line_idx;
+                let target_linebreak_count;
+                if mode == SelectionMode::Up {
+                    // If we're on the first line, return
+                    if current_line == 0 {
+                        return;
+                    }
+                    target_line_idx = current_line - 1;
+                    target_linebreak_count = self.linebreaks_before_line(current_line);
                 }
-                let above_line = self.buffer.line(current_line - 1);
-                let linebreaks_after_above_line = self.linebreaks_before_line(current_line);
+                else {
+                    // If we're on the last line, return
+                    if current_line == self.buffer.len_lines() - 1 {
+                        return;
+                    }
+                    target_line_idx = current_line + 1;
+                    target_linebreak_count = self.linebreaks_before_line(target_line_idx);
+                }
+
+                let target_line = self.buffer.line(target_line_idx);
+                let target_line_length = target_line.len_chars().saturating_sub(target_linebreak_count);
 
                 let current_offset = caret_absolute_pos - self.buffer.line_to_char(current_line);
-
                 let desired_offset = max(self.cached_char_offset, current_offset as u32);
                 self.cached_char_offset = desired_offset;
 
-                let above_line_char_length = above_line.len_chars().saturating_sub(linebreaks_after_above_line);
-                let new_offset = min(above_line_char_length, desired_offset as usize);
+                let new_offset = min(target_line_length, desired_offset as usize);
 
-                self.caret_char_pos = self.buffer.line_to_char(current_line - 1) + new_offset;
-                self.caret_is_trailing = 0;
-            },
-            SelectionMode::Down => {
-                let current_line = self.buffer.char_to_line(caret_absolute_pos);
-
-                // If we're on the last line, return
-                if current_line == self.buffer.len_lines() - 1 {
-                    return;
-                }
-                let below_line = self.buffer.line(current_line + 1); 
-                let linebreaks_after_current_line = self.linebreaks_before_line(current_line + 1);
-
-                let current_offset = caret_absolute_pos - self.buffer.line_to_char(current_line);
-
-                let desired_offset = max(self.cached_char_offset, current_offset as u32);
-                self.cached_char_offset = desired_offset;
-
-                let below_line_char_length = below_line.len_chars().saturating_sub(linebreaks_after_current_line);
-                let new_offset = min(below_line_char_length, desired_offset as usize);
-
-                self.caret_char_pos = self.buffer.line_to_char(current_line + 1) + new_offset;
+                self.caret_char_pos = self.buffer.line_to_char(target_line_idx) + new_offset;
                 self.caret_is_trailing = 0;
             },
         }
@@ -285,51 +278,31 @@ impl TextBuffer {
 
     pub fn set_mouse_selection(&mut self, mode: MouseSelectionMode, mouse_pos: (f32, f32)) {
         let relative_mouse_pos = self.translate_mouse_pos_to_text_region(mouse_pos);
-        match mode {
-            MouseSelectionMode::Click => {
-                let mut is_inside = 0;
-                let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
+        if mode == MouseSelectionMode::Click || (mode == MouseSelectionMode::Move && self.currently_selecting) {
+            let mut is_inside = 0;
+            let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
 
-                unsafe {
-                    dx_ok!(
-                        (*self.text_layout).HitTestPoint(
-                            relative_mouse_pos.0,
-                            relative_mouse_pos.1,
-                            &mut self.caret_is_trailing,
-                            &mut is_inside,
-                            metrics_uninit.as_mut_ptr()
-                        )
-                    );
+            unsafe {
+                dx_ok!(
+                    (*self.text_layout).HitTestPoint(
+                        relative_mouse_pos.0,
+                        relative_mouse_pos.1,
+                        &mut self.caret_is_trailing,
+                        &mut is_inside,
+                        metrics_uninit.as_mut_ptr()
+                    )
+                );
 
-                    let metrics = metrics_uninit.assume_init();
-                    let absolute_text_pos = metrics.textPosition as usize;
+                let metrics = metrics_uninit.assume_init();
+                let absolute_text_pos = metrics.textPosition as usize;
 
-                    self.caret_char_pos = self.absolute_char_pos_start + absolute_text_pos;
-                }
-            },
+                self.caret_char_pos = self.absolute_char_pos_start + absolute_text_pos;
+            }
 
-            MouseSelectionMode::Move => {
-                if self.currently_selecting {
-                    let mut is_inside = 0;
-                    let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
-
-                    unsafe {
-                        dx_ok!(
-                            (*self.text_layout).HitTestPoint(
-                                relative_mouse_pos.0,
-                                relative_mouse_pos.1,
-                                &mut self.caret_is_trailing,
-                                &mut is_inside,
-                                metrics_uninit.as_mut_ptr()
-                            )
-                        );
-
-                        let metrics = metrics_uninit.assume_init();
-                        let absolute_text_pos = metrics.textPosition as usize;
-
-                        self.caret_char_pos = self.absolute_char_pos_start + absolute_text_pos;
-                    }
-                }
+            // If we're at the end of the rope, the caret may not be trailing
+            // otherwise we will be inserting out of bounds on the rope
+            if self.caret_char_pos == self.buffer.len_chars() {
+                self.caret_is_trailing = 0;
             }
         }
     }
@@ -337,12 +310,6 @@ impl TextBuffer {
     fn translate_mouse_pos_to_text_region(&self, mouse_pos: (f32, f32)) -> (f32, f32) {
         let dx = mouse_pos.0 - self.text_origin.0 as f32;
         let dy = mouse_pos.1 - self.text_origin.1 as f32;
-        (dx, dy)
-    }
-
-    fn translate_relative_mouse_pos_to_absolute(&self, mouse_pos: (f32, f32)) -> (f32, f32) {
-        let dx = mouse_pos.0 + self.text_origin.0 as f32;
-        let dy = mouse_pos.1 + self.text_origin.1 as f32;
         (dx, dy)
     }
 
