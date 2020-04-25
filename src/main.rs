@@ -119,7 +119,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             return 0;
         },
         WM_CHAR => {
-            if wparam >= 0x20 {
+            if wparam >= 0x20 && wparam <= 0x7E {
                 (*editor).execute_command(EditorCommand::CharInsert(wparam as u16));
             }
             return 0;

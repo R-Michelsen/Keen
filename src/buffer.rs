@@ -40,6 +40,18 @@ pub enum MouseSelectionMode {
     Move
 }
 
+#[derive(PartialEq)]
+pub enum CharType {
+    Word,
+    Punctuation,
+    Linebreak
+}
+
+pub enum CharSearchDirection {
+    Forward,
+    Backward
+}
+
 pub struct TextBuffer {
     buffer: Rope,
 
@@ -157,6 +169,73 @@ impl TextBuffer {
         self.update_absolute_char_positions();
     } 
 
+    fn is_linebreak(&self, chr: char) -> bool {
+        return chr == '\n'
+            || chr == '\r'
+            || chr == '\u{000B}'
+            || chr == '\u{000C}'
+            || chr == '\u{000D}'
+            || chr == '\u{0085}'
+            || chr == '\u{2028}'
+            || chr == '\u{2029}';
+    }
+
+    // Underscore is treated as part of a word to make movement
+    // programming in snake_case easier.
+    fn is_word(&self, chr: char) -> bool {
+        return chr.is_alphanumeric() || chr == '_';
+    }
+
+    fn get_char_type(&self, chr: char) -> CharType {
+        match chr {
+            x if self.is_word(x) => CharType::Word,
+            x if self.is_linebreak(x) => CharType::Linebreak,
+            _ => CharType::Punctuation
+        }
+    }
+
+    // Finds the number of characters until a boundary
+    // A boundary is defined to be punctuation when the
+    // current char is inside a word, and alphanumeric otherwise
+    // bool specifies the direction to search in,
+    // true for right false for left
+    fn get_boundary_char_count(&self, search_direction: CharSearchDirection) -> usize {
+        let caret_absolute_pos = self.get_caret_absolute_pos();
+        let mut chars = self.buffer.chars_at(caret_absolute_pos);
+        let mut count = 0;
+
+        match search_direction {
+            CharSearchDirection::Forward => {
+                if caret_absolute_pos == self.buffer.len_chars() {
+                    return 0;
+                }
+                //let caret_inside_word = self.is_inside_word(self.buffer.char(caret_absolute_pos));
+                let current_char_type = self.get_char_type(self.buffer.char(caret_absolute_pos));
+                while let Some(chr) = chars.next() {
+                    if self.get_char_type(chr) != current_char_type {
+                        break;
+                    }
+                    count += 1;
+                }
+            },
+            CharSearchDirection::Backward => {
+                if caret_absolute_pos == 0 {
+                    return 0;
+                }
+                //let left_of_current_char_type = self.is_inside_word(self.buffer.char(caret_absolute_pos - 1));
+                let left_of_current_char_type = self.get_char_type(self.buffer.char(caret_absolute_pos - 1));
+                while let Some(chr) = chars.prev() {
+                    if self.get_char_type(chr) != left_of_current_char_type {
+                        break;
+                    }
+                    count += 1;
+                }
+            }
+        }
+
+        count
+    }
+
     pub fn move_left(&mut self, shift_down: bool) {
         let mut count = 1;
         if self.see_prev_chars("\r\n") {
@@ -165,11 +244,21 @@ impl TextBuffer {
         self.set_selection(SelectionMode::Left, count, shift_down);
     }
 
+    pub fn move_left_by_word(&mut self, shift_down: bool) {
+        let count = self.get_boundary_char_count(CharSearchDirection::Backward);
+        self.set_selection(SelectionMode::Left, count, shift_down);
+    }
+
     pub fn move_right(&mut self, shift_down: bool) {
         let mut count = 1;
         if self.see_chars("\r\n") {
             count = 2;
         }
+        self.set_selection(SelectionMode::Right, count, shift_down);
+    }
+
+    pub fn move_right_by_word(&mut self, shift_down: bool) {
+        let count = self.get_boundary_char_count(CharSearchDirection::Forward);
         self.set_selection(SelectionMode::Right, count, shift_down);
     }
 
@@ -278,6 +367,7 @@ impl TextBuffer {
 
     pub fn set_mouse_selection(&mut self, mode: MouseSelectionMode, mouse_pos: (f32, f32)) {
         let relative_mouse_pos = self.translate_mouse_pos_to_text_region(mouse_pos);
+
         if mode == MouseSelectionMode::Click || (mode == MouseSelectionMode::Move && self.currently_selecting) {
             let mut is_inside = 0;
             let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
@@ -330,10 +420,6 @@ impl TextBuffer {
         }
     }
 
-    pub fn clear_selection(&mut self) {
-        self.caret_char_anchor = self.caret_char_pos;
-    }
-
     pub fn insert_chars(&mut self, chars: &str) {
         self.delete_selection();
 
@@ -374,8 +460,8 @@ impl TextBuffer {
         true
     }
 
-    pub fn delete_char(&mut self) {
-        let caret_absolute_pos = min(self.get_caret_absolute_pos(), self.buffer.len_chars());
+    pub fn delete_right(&mut self) {
+        let caret_absolute_pos = self.get_caret_absolute_pos();
 
         // If we are currently selecting text, 
         // simply delete the selected text
@@ -392,13 +478,26 @@ impl TextBuffer {
 
         let next_char_pos = min(caret_absolute_pos + offset, self.buffer.len_chars());
         self.buffer.remove(caret_absolute_pos..next_char_pos);
-
-        self.clear_selection();
         self.update_absolute_char_positions();
     }
 
-    pub fn delete_previous_char(&mut self) {
-        let caret_absolute_pos = min(self.get_caret_absolute_pos(), self.buffer.len_chars());
+    pub fn delete_right_by_word(&mut self) {
+        let caret_absolute_pos = self.get_caret_absolute_pos();
+
+        // If we are currently selecting text, 
+        // simply delete the selected text
+        if caret_absolute_pos != self.caret_char_anchor {
+            self.delete_selection();
+            return;
+        }
+
+        let count = self.get_boundary_char_count(CharSearchDirection::Forward);
+        self.set_selection(SelectionMode::Right, count, true);
+        self.delete_selection();
+    }
+
+    pub fn delete_left(&mut self) {
+        let caret_absolute_pos = self.get_caret_absolute_pos();
 
         // If we are currently selecting text, 
         // simply delete the selected text
@@ -416,9 +515,22 @@ impl TextBuffer {
         let previous_char_pos = caret_absolute_pos.saturating_sub(offset);
         self.buffer.remove(previous_char_pos..caret_absolute_pos);
         self.set_selection(SelectionMode::Left, offset, false);
-
-        self.clear_selection();
         self.update_absolute_char_positions();
+    }
+
+    pub fn delete_left_by_word(&mut self) {
+        let caret_absolute_pos = self.get_caret_absolute_pos();
+
+        // If we are currently selecting text, 
+        // simply delete the selected text
+        if caret_absolute_pos != self.caret_char_anchor {
+            self.delete_selection();
+            return;
+        }
+
+        let count = self.get_boundary_char_count(CharSearchDirection::Backward);
+        self.set_selection(SelectionMode::Left, count, true);
+        self.delete_selection();
     }
 
     pub fn get_caret_rect(&mut self) -> Option<D2D1_RECT_F> {

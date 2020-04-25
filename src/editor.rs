@@ -88,8 +88,8 @@ impl Editor {
     pub fn execute_command(&mut self, cmd: EditorCommand) {
         match cmd {
             EditorCommand::CaretVisible | EditorCommand::CaretInvisible if self.force_visible_caret_timer > 0 => {
-                    self.force_visible_caret_timer = self.force_visible_caret_timer.saturating_sub(1);
-                    self.caret_is_visible = true;
+                self.force_visible_caret_timer = self.force_visible_caret_timer.saturating_sub(1);
+                self.caret_is_visible = true;
             },
             EditorCommand::CaretVisible => self.caret_is_visible = true,
             EditorCommand::CaretInvisible => self.caret_is_visible = false,
@@ -108,15 +108,19 @@ impl Editor {
                 self.buffers[self.buffer_idx].set_mouse_selection(MouseSelectionMode::Move, mouse_pos);
             },
             EditorCommand::KeyPressed(key, shift_down, ctrl_down) => { 
-                match key {
-                    VK_LEFT => self.buffers[self.buffer_idx].move_left(shift_down),
-                    VK_RIGHT => self.buffers[self.buffer_idx].move_right(shift_down),
-                    VK_DOWN => self.buffers[self.buffer_idx].set_selection(SelectionMode::Down, 1, shift_down),
-                    VK_UP => self.buffers[self.buffer_idx].set_selection(SelectionMode::Up, 1, shift_down),
-                    VK_TAB => self.buffers[self.buffer_idx].insert_chars(" ".repeat(settings::NUMBER_OF_SPACES_PER_TAB).as_str()),
-                    VK_RETURN => self.buffers[self.buffer_idx].insert_chars("\r\n"),
-                    VK_DELETE => self.buffers[self.buffer_idx].delete_char(),
-                    VK_BACK => self.buffers[self.buffer_idx].delete_previous_char(),
+                match (key, ctrl_down) {
+                    (VK_LEFT, false)   => self.buffers[self.buffer_idx].move_left(shift_down),
+                    (VK_LEFT, true)    => self.buffers[self.buffer_idx].move_left_by_word(shift_down),
+                    (VK_RIGHT, false)  => self.buffers[self.buffer_idx].move_right(shift_down),
+                    (VK_RIGHT, true)   => self.buffers[self.buffer_idx].move_right_by_word(shift_down),
+                    (VK_DOWN, _)       => self.buffers[self.buffer_idx].set_selection(SelectionMode::Down, 1, shift_down),
+                    (VK_UP, _)         => self.buffers[self.buffer_idx].set_selection(SelectionMode::Up, 1, shift_down),
+                    (VK_TAB, _)        => self.buffers[self.buffer_idx].insert_chars(" ".repeat(settings::NUMBER_OF_SPACES_PER_TAB).as_str()),
+                    (VK_RETURN, _)     => self.buffers[self.buffer_idx].insert_chars("\r\n"),
+                    (VK_DELETE, false) => self.buffers[self.buffer_idx].delete_right(),
+                    (VK_DELETE, true)  => self.buffers[self.buffer_idx].delete_right_by_word(),
+                    (VK_BACK, false)   => self.buffers[self.buffer_idx].delete_left(),
+                    (VK_BACK, true)    => self.buffers[self.buffer_idx].delete_left_by_word(),
                     _ => {}
                 }
                 self.force_caret_visible();
