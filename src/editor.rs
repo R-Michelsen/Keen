@@ -21,6 +21,7 @@ pub enum EditorCommand {
     ScrollUp,
     ScrollDown,
     LeftClick(MousePos, ShiftDown),
+    LeftDoubleClick(MousePos),
     LeftRelease,
     MouseMove(MousePos),
     KeyPressed(i32, ShiftDown, CtrlDown),
@@ -103,6 +104,10 @@ impl Editor {
                 self.buffers[self.buffer_idx].left_click(mouse_pos, shift_down);
                 self.force_caret_visible();
             },
+            EditorCommand::LeftDoubleClick(mouse_pos) => {
+                self.buffers[self.buffer_idx].left_double_click(mouse_pos);
+                self.force_caret_visible();
+            }
             EditorCommand::LeftRelease => self.buffers[self.buffer_idx].left_release(),
             EditorCommand::MouseMove(mouse_pos) => {
                 self.buffers[self.buffer_idx].set_mouse_selection(MouseSelectionMode::Move, mouse_pos);

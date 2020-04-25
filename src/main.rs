@@ -37,8 +37,8 @@ use winapi::{
             WM_MOUSEWHEEL, WM_LBUTTONDOWN, WM_ERASEBKGND, 
             WM_LBUTTONUP, WM_KEYDOWN, VK_SHIFT, VK_CONTROL,
             WM_CREATE, CREATESTRUCTW, GWLP_USERDATA, 
-            WM_MOUSEMOVE, WM_NCDESTROY, SW_SHOW,
-            WS_OVERLAPPEDWINDOW, CS_HREDRAW, CS_VREDRAW,
+            WM_MOUSEMOVE, WM_NCDESTROY, SW_SHOW, WM_LBUTTONDBLCLK,
+            WS_OVERLAPPEDWINDOW, CS_HREDRAW, CS_VREDRAW, CS_DBLCLKS,
             WNDCLASSW, PAINTSTRUCT, InvalidateRect, DestroyWindow
         },
         errhandlingapi::GetLastError,
@@ -141,6 +141,12 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             InvalidateRect(hwnd, null_mut(), false as i32);
             return 0;
         },
+        WM_LBUTTONDBLCLK => {
+            let mouse_pos = (GET_X_LPARAM(lparam) as f32, GET_Y_LPARAM(lparam) as f32);
+            (*editor).execute_command(EditorCommand::LeftDoubleClick(mouse_pos));
+            InvalidateRect(hwnd, null_mut(), false as i32);
+            return 0;
+        }
         WM_LBUTTONUP => {
             ReleaseCapture();
             (*editor).execute_command(EditorCommand::LeftRelease);
@@ -174,7 +180,7 @@ fn main() {
         let wnd_class_name: Vec<u16> = OsStr::new("Keen_Class").encode_wide().chain(once(0)).collect();
 
         let wnd_class = WNDCLASSW {
-            style: CS_HREDRAW | CS_VREDRAW,
+            style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
             lpfnWndProc: Some(wnd_proc),
             lpszClassName: wnd_class_name.as_ptr(),
             lpszMenuName: 0 as LPCWSTR,

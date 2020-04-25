@@ -273,6 +273,21 @@ impl TextBuffer {
         self.cached_char_offset = 0;
     }
 
+    pub fn left_double_click(&mut self, mouse_pos: (f32, f32)) {
+        self.set_mouse_selection(MouseSelectionMode::Click, mouse_pos);
+
+        // Find the boundary on each side of the cursor
+        let left_count = self.get_boundary_char_count(CharSearchDirection::Backward);
+        let right_count = self.get_boundary_char_count(CharSearchDirection::Forward);
+
+        // Set the caret position at the left edge
+        self.caret_char_pos = self.get_caret_absolute_pos() - left_count;
+        self.caret_is_trailing = 0;
+
+        // Set the anchor position at the right edge
+        self.caret_char_anchor = self.caret_char_pos + (left_count + right_count);
+    }
+
     pub fn left_release(&mut self) {
         self.currently_selecting = false;
     }
