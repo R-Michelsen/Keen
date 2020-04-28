@@ -718,11 +718,8 @@ impl TextBuffer {
                 let top_line_absolute_pos = self.buffer.line_to_char(self.top_line);
 
                 let mut multiline_start_position = 0;
+                let mut multiline_active = false;
                 for line in self.top_line..min(self.buffer.len_lines(), self.bot_line) {
-                    if line >= self.buffer.len_lines() {
-                        break;
-                    }
-
                     let line_absolute_pos = self.buffer.line_to_char(line);
                     let slice = self.buffer.line(line);
 
@@ -775,12 +772,14 @@ impl TextBuffer {
                                     length: (position - multiline_start_position as usize) as u32
                                 };
                                 highlights.push((range, SemanticTokenTypes::Comment));
+                                multiline_active = false;
                             }
                             was_star = false;
                             was_forward_slash = true;
                         }
                         else if chr == '*' {
                             if was_forward_slash {
+                                multiline_active = true;
                                 multiline_start_position = (line_absolute_pos + (char_pos - 1) as usize) - top_line_absolute_pos;
                             }
                             was_star = true;
@@ -813,6 +812,18 @@ impl TextBuffer {
                         }
                         char_pos += 1;
                     }
+                }
+
+                // If there is still a multiline comment active,
+                // comment it out
+                if multiline_active {
+                    let line_num = min(self.buffer.len_lines(), self.bot_line);
+                    let position = (self.buffer.line_to_char(line_num) + self.buffer.line(line_num).len_chars()) - top_line_absolute_pos;
+                    let range = DWRITE_TEXT_RANGE {
+                        startPosition: multiline_start_position as u32,
+                        length: (position - multiline_start_position as usize) as u32
+                    };
+                    highlights.push((range, SemanticTokenTypes::Comment));
                 }
         
                 highlights
