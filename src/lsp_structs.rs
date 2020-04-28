@@ -99,7 +99,10 @@ pub enum SemanticTokenTypes {
     Function,
     Method,
     Class,
-    Enum
+    Enum,
+    Comment,
+    Keyword,
+    Literal
 }
 
 #[derive(Debug)]
@@ -247,10 +250,10 @@ impl RustSemanticTokenTypes {
 
     pub fn to_semantic_token_type(rust_token_type: RustSemanticTokenTypes) -> SemanticTokenTypes {
         match rust_token_type {
-            RustSemanticTokenTypes::Comment             => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::Keyword             => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::String              => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::Number              => SemanticTokenTypes::None,
+            RustSemanticTokenTypes::Comment             => SemanticTokenTypes::Comment,
+            RustSemanticTokenTypes::Keyword             => SemanticTokenTypes::Keyword,
+            RustSemanticTokenTypes::String              => SemanticTokenTypes::Literal,
+            RustSemanticTokenTypes::Number              => SemanticTokenTypes::Literal,
             RustSemanticTokenTypes::Regexp              => SemanticTokenTypes::None,
             RustSemanticTokenTypes::Operator            => SemanticTokenTypes::None,
             RustSemanticTokenTypes::Namespace           => SemanticTokenTypes::None,
@@ -269,7 +272,7 @@ impl RustSemanticTokenTypes {
             RustSemanticTokenTypes::Label               => SemanticTokenTypes::None,
             RustSemanticTokenTypes::Attribute           => SemanticTokenTypes::None,
             RustSemanticTokenTypes::BuiltinType         => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::EnumMember          => SemanticTokenTypes::None,
+            RustSemanticTokenTypes::EnumMember          => SemanticTokenTypes::Variable,
             RustSemanticTokenTypes::Lifetime            => SemanticTokenTypes::None,
             RustSemanticTokenTypes::TypeAlias           => SemanticTokenTypes::None,
             RustSemanticTokenTypes::Union               => SemanticTokenTypes::None,
@@ -363,7 +366,7 @@ pub struct Range {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextDocumentContentChangeEvent {
-    pub range: Range,
+    pub range: Option<Range>,
     pub text: String
 }
 

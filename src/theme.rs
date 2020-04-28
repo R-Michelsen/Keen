@@ -27,7 +27,9 @@ pub struct Theme {
     pub method_brush: *mut ID2D1SolidColorBrush,
     pub class_brush: *mut ID2D1SolidColorBrush,
     pub enum_brush: *mut ID2D1SolidColorBrush,
-    pub test_brush: *mut ID2D1SolidColorBrush
+    pub comment_brush: *mut ID2D1SolidColorBrush,
+    pub keyword_brush: *mut ID2D1SolidColorBrush,
+    pub literal_brush: *mut ID2D1SolidColorBrush
 }
 
 impl Default for Theme {
@@ -43,7 +45,9 @@ impl Default for Theme {
             method_brush: null_mut(),
             class_brush: null_mut(),
             enum_brush: null_mut(),
-            test_brush: null_mut()
+            comment_brush: null_mut(),
+            keyword_brush: null_mut(),
+            literal_brush: null_mut()
         }
     }
 }
@@ -61,7 +65,9 @@ impl Theme {
             method_brush: null_mut(),
             class_brush: null_mut(),
             enum_brush: null_mut(),
-            test_brush: null_mut()
+            comment_brush: null_mut(),
+            keyword_brush: null_mut(),
+            literal_brush: null_mut()
         };
 
         let brush_properties = D2D1_BRUSH_PROPERTIES {
@@ -72,13 +78,15 @@ impl Theme {
         const TEXT_COLOR: D3DCOLORVALUE = create_color(0xFBF1C7FF);
         const LINE_NUMBER_COLOR: D3DCOLORVALUE = create_color(0xD5C4A1FF);
         const CARET_COLOR: D3DCOLORVALUE = create_color(0xFE8019FF);
-        const SELECTION_COLOR: D3DCOLORVALUE = create_color(0xD65D0EFF);
-        const VARIABLE_COLOR: D3DCOLORVALUE = create_color(0x8EC07CFF);
+        const SELECTION_COLOR: D3DCOLORVALUE = create_color(0x0F52BAFF);
+        const VARIABLE_COLOR: D3DCOLORVALUE = create_color(0xADD8E6FF);
         const FUNCTION_COLOR: D3DCOLORVALUE = create_color(0xFABD2FFF);
         const METHOD_COLOR: D3DCOLORVALUE = create_color(0xD79921FF);
-        const CLASS_COLOR: D3DCOLORVALUE = create_color(0x83A598FF);
-        const ENUM_COLOR: D3DCOLORVALUE = create_color(0x83A598FF);
-        const TEST_COLOR: D3DCOLORVALUE = create_color(0x00FF00FF);
+        const CLASS_COLOR: D3DCOLORVALUE = create_color(0xFB4934FF);
+        const ENUM_COLOR: D3DCOLORVALUE = create_color(0xFB4934FF);
+        const COMMENT_COLOR: D3DCOLORVALUE = create_color(0x66e599FF);
+        const KEYWORD_COLOR: D3DCOLORVALUE = create_color(0xD3869BFF);
+        const LITERAL_COLOR: D3DCOLORVALUE = create_color(0xFE8019FF);
 
         unsafe {
             dx_ok!((*target).CreateSolidColorBrush(&TEXT_COLOR, &brush_properties, &mut theme.text_brush as *mut *mut _));
@@ -90,7 +98,9 @@ impl Theme {
             dx_ok!((*target).CreateSolidColorBrush(&METHOD_COLOR, &brush_properties, &mut theme.method_brush as *mut *mut _));
             dx_ok!((*target).CreateSolidColorBrush(&CLASS_COLOR, &brush_properties, &mut theme.class_brush as *mut *mut _));
             dx_ok!((*target).CreateSolidColorBrush(&ENUM_COLOR, &brush_properties, &mut theme.enum_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&TEST_COLOR, &brush_properties, &mut theme.test_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&COMMENT_COLOR, &brush_properties, &mut theme.comment_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&KEYWORD_COLOR, &brush_properties, &mut theme.keyword_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&LITERAL_COLOR, &brush_properties, &mut theme.literal_brush as *mut *mut _));
         }
 
         theme

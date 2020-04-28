@@ -66,13 +66,6 @@ macro_rules! dx_ok {
 
 const IDENTITY_MATRIX: D2D1_MATRIX_3X2_F = D2D1_MATRIX_3X2_F { matrix: [[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]] };
 
-struct Brushes {
-    text: *mut ID2D1SolidColorBrush,
-    line_number: *mut ID2D1SolidColorBrush,
-    caret: *mut ID2D1SolidColorBrush,
-    selection: *mut ID2D1SolidColorBrush
-}
-
 pub struct TextRenderer {
     dpi_scale: f32,
     pub pixel_size: D2D1_SIZE_U,
@@ -313,12 +306,15 @@ impl TextRenderer {
             let highlights = text_buffer.get_semantic_highlighting();
             for (range, token_type) in highlights {
                 match token_type {
-                    SemanticTokenTypes::None     => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.test_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::None     => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.text_brush as *mut IUnknown, range)); },
                     SemanticTokenTypes::Variable => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.variable_brush as *mut IUnknown, range)); },
                     SemanticTokenTypes::Function => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.function_brush as *mut IUnknown, range)); },
                     SemanticTokenTypes::Method   => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.method_brush as *mut IUnknown, range)); },
                     SemanticTokenTypes::Class    => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.class_brush as *mut IUnknown, range)); },
                     SemanticTokenTypes::Enum     => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.enum_brush as *mut IUnknown, range)); }
+                    SemanticTokenTypes::Comment  => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.comment_brush as *mut IUnknown, range)); }
+                    SemanticTokenTypes::Keyword  => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.keyword_brush as *mut IUnknown, range)); }
+                    SemanticTokenTypes::Literal   => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.literal_brush as *mut IUnknown, range)); }
                 }
             }
 

@@ -152,6 +152,7 @@ impl Editor {
 
     pub fn process_language_server_response(&mut self, response: &str) {
         // Don't handle requests from server
+        
         if response.contains("method") {
             return;
         }
@@ -172,6 +173,22 @@ impl Editor {
                     buffer.update_semantic_tokens(result.data);
                 }
             }
+        }
+    }
+
+    pub fn process_document_change(did_change_notification: DidChangeNotification, buffer: &mut TextBuffer, lsp_client: &mut LSPClient) {
+        // rust-analyzer only supports full change notifications
+        match buffer.language_identifier {
+            CPP_LANGUAGE_IDENTIFIER => {
+                lsp_client.send_did_change_notification(did_change_notification);
+                lsp_client.send_semantic_token_request(buffer.get_uri());
+            },
+            RUST_LANGUAGE_IDENTIFIER => {
+                let full_did_change_notification = buffer.get_full_did_change_notification();
+                lsp_client.send_did_change_notification(full_did_change_notification);
+                lsp_client.send_semantic_token_request(buffer.get_uri());
+            },
+            _ => {}
         }
     }
 
@@ -214,34 +231,28 @@ impl Editor {
                         (VK_UP, _)         => buffer.set_selection(SelectionMode::Up, 1, shift_down),
                         (VK_TAB, _)        => {
                             let did_change_notification = buffer.insert_chars(" ".repeat(NUMBER_OF_SPACES_PER_TAB).as_str());
-                            lsp_client.send_did_change_notification(did_change_notification);
-                            lsp_client.send_semantic_token_request(buffer.get_uri());
+                            Editor::process_document_change(did_change_notification, buffer, lsp_client)
                         },
                         (VK_RETURN, true)  => lsp_client.send_semantic_token_request(buffer.get_uri()),
                         (VK_RETURN, false) => {
                             let did_change_notification = buffer.insert_chars("\r\n");
-                            lsp_client.send_did_change_notification(did_change_notification);
-                            lsp_client.send_semantic_token_request(buffer.get_uri());
+                            Editor::process_document_change(did_change_notification, buffer, lsp_client)
                         },
                         (VK_DELETE, false) => {
                             let did_change_notification = buffer.delete_right();
-                            lsp_client.send_did_change_notification(did_change_notification);
-                            lsp_client.send_semantic_token_request(buffer.get_uri());
+                            Editor::process_document_change(did_change_notification, buffer, lsp_client)
                         },
                         (VK_DELETE, true) => {
                             let did_change_notification = buffer.delete_right_by_word();
-                            lsp_client.send_did_change_notification(did_change_notification);
-                            lsp_client.send_semantic_token_request(buffer.get_uri());
+                            Editor::process_document_change(did_change_notification, buffer, lsp_client)
                         },
                         (VK_BACK, false) => {
                             let did_change_notification = buffer.delete_left();
-                            lsp_client.send_did_change_notification(did_change_notification);
-                            lsp_client.send_semantic_token_request(buffer.get_uri());
+                            Editor::process_document_change(did_change_notification, buffer, lsp_client)
                         },
                         (VK_BACK, true) => {
                             let did_change_notification = buffer.delete_left_by_word();
-                            lsp_client.send_did_change_notification(did_change_notification);
-                            lsp_client.send_semantic_token_request(buffer.get_uri());
+                            Editor::process_document_change(did_change_notification, buffer, lsp_client)
                         },
                         _ => {}
                     }
@@ -249,8 +260,7 @@ impl Editor {
                 }
                 EditorCommand::CharInsert(character) => {
                     let did_change_notification = buffer.insert_char(character);
-                    lsp_client.send_did_change_notification(did_change_notification);
-                    lsp_client.send_semantic_token_request(buffer.get_uri());
+                    Editor::process_document_change(did_change_notification, buffer, lsp_client);
                     self.force_caret_visible();
                 }
                 EditorCommand::LSPClientCrash(client) => {

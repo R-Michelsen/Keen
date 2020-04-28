@@ -76,6 +76,10 @@ pub struct TextBuffer {
     // for the editor to use
     pub currently_selecting: bool,
 
+    // The language of the text buffer as
+    // identified by its extension
+    pub language_identifier: &'static str,
+
     top_line: usize,
     bot_line: usize,
     absolute_char_pos_start: usize,
@@ -97,7 +101,6 @@ pub struct TextBuffer {
 
     renderer: Rc<RefCell<TextRenderer>>,
 
-    language_identifier: &'static str,
     lsp_versioned_identifier: VersionedTextDocumentIdentifier,
     semantic_tokens: Vec<u32>
 }
@@ -128,6 +131,8 @@ impl TextBuffer {
 
             currently_selecting: false,
 
+            language_identifier,
+
             top_line: 0,
             bot_line: 0,
             absolute_char_pos_start: 0,
@@ -149,7 +154,6 @@ impl TextBuffer {
 
             renderer,
 
-            language_identifier,
             lsp_versioned_identifier: VersionedTextDocumentIdentifier {
                 uri: "file:///".to_owned() + path,
                 version: 0
@@ -159,6 +163,17 @@ impl TextBuffer {
 
         text_buffer.update_metrics(origin, extents);
         text_buffer
+    }
+
+    pub fn get_full_did_change_notification(&mut self) -> DidChangeNotification {
+        let timer = std::time::Instant::now();
+        // Update the file version and return the change notification
+        self.lsp_versioned_identifier.version += 1;
+        let change_event = TextDocumentContentChangeEvent {
+            text: self.buffer.to_string(),
+            range: None
+        };
+        DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![change_event])
     }
 
     pub fn update_semantic_tokens(&mut self, data: Vec<u32>) {
@@ -459,10 +474,10 @@ impl TextBuffer {
 
             change_event = TextDocumentContentChangeEvent {
                 text: "".to_owned(),
-                range: Range {
+                range: Some(Range {
                     start: Position::new(line as i64, character_position_in_line as i64),
                     end: Position::new(end_line as i64, character_position_in_end_line as i64),
-                }
+                })
             };
         }
         else {
@@ -475,10 +490,10 @@ impl TextBuffer {
 
             change_event = TextDocumentContentChangeEvent {
                 text: "".to_owned(),
-                range: Range {
+                range: Some(Range {
                     start: Position::new(start_line as i64, character_position_in_start_line as i64),
                     end: Position::new(line as i64, character_position_in_line as i64),
-                }
+                })
             };
         }
         self.caret_is_trailing = 0;
@@ -509,10 +524,10 @@ impl TextBuffer {
         self.lsp_versioned_identifier.version += 1;
         let change_event = TextDocumentContentChangeEvent {
             text: chars.to_owned(),
-            range: Range {
+            range: Some(Range {
                 start: Position::new(line as i64, character_position_in_line as i64),
                 end: Position::new(line as i64, character_position_in_line as i64),
-            }
+            })
         };
 
         changes.push(change_event);
@@ -541,10 +556,10 @@ impl TextBuffer {
         self.lsp_versioned_identifier.version += 1;
         let change_event = TextDocumentContentChangeEvent {
             text: ((character as u8) as char).to_string(),
-            range: Range {
+            range: Some(Range {
                 start: Position::new(line as i64, character_position_in_line as i64),
                 end: Position::new(line as i64, character_position_in_line as i64),
-            }
+            })
         };
 
         changes.push(change_event);
@@ -607,10 +622,10 @@ impl TextBuffer {
         self.lsp_versioned_identifier.version += 1;
         let change_event = TextDocumentContentChangeEvent {
             text: "".to_owned(),
-            range: Range {
+            range: Some(Range {
                 start: Position::new(line as i64, character_position_in_line as i64),
                 end: Position::new(new_line as i64, new_character_position_in_line as i64),
-            }
+            })
         };
         DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![change_event])
     }
@@ -667,10 +682,10 @@ impl TextBuffer {
         self.lsp_versioned_identifier.version += 1;
         let change_event = TextDocumentContentChangeEvent {
             text: "".to_owned(),
-            range: Range {
+            range: Some(Range {
                 start: Position::new(new_line as i64, new_character_position_in_line as i64),
                 end: Position::new(line as i64, character_position_in_line as i64),
-            }
+            })
         };
         DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![change_event])
     }

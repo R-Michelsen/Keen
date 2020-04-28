@@ -207,7 +207,14 @@ impl LSPClient {
                         publish_diagnostics: None,
                         folding_range: None,
                         selection_range: None,
-                        semantic_tokens: None
+                        semantic_tokens: Some(SemanticTokensClientCapabilities {
+                            dynamic_registration: Some(true),
+                            token_types: Some(vec!["comment".to_owned(), "keyword".to_owned(), "number".to_owned(), "regexp".to_owned(), "operator".to_owned(), 
+                            "namespace".to_owned(), "type".to_owned(), "struct".to_owned(), "class".to_owned(), "interface".to_owned(), "enum".to_owned(), "typeParameter".to_owned(), 
+                            "function".to_owned(), "member".to_owned(), "macro".to_owned(), "variable".to_owned(), "parameter".to_owned(), "property".to_owned(), "label".to_owned()]),
+                            token_modifiers: Some(vec!["declaration".to_owned(), "documentation".to_owned(), "static".to_owned(), "abstract".to_owned(),
+                            "deprecated".to_owned(), "readonly".to_owned()])
+                        }),
                     }),
                     window: None,
                     experimental: None
