@@ -23,14 +23,9 @@ use winapi::{
 use ropey::Rope;
 
 use crate::dx_ok;
-use crate::settings::{ CPP_LANGUAGE_IDENTIFIER, RUST_LANGUAGE_IDENTIFIER, MOUSEWHEEL_LINES_PER_ROLL, NUMBER_OF_SPACES_PER_TAB };
+use crate::settings::{ NUMBER_OF_SPACES_PER_TAB };
+use crate::lsp_structs::*;
 use crate::renderer::TextRenderer;
-use crate::lsp_structs::{ 
-    VersionedTextDocumentIdentifier, TextDocumentContentChangeEvent, 
-    Range, Position, DidChangeNotification, 
-    RustSemanticTokenTypes, RustSemanticTokenModifiers,
-    CppSemanticTokenTypes, SemanticTokenTypes
-};
 
 #[derive(PartialEq)]
 pub enum SelectionMode {
@@ -166,7 +161,6 @@ impl TextBuffer {
     }
 
     pub fn get_full_did_change_notification(&mut self) -> DidChangeNotification {
-        let timer = std::time::Instant::now();
         // Update the file version and return the change notification
         self.lsp_versioned_identifier.version += 1;
         let change_event = TextDocumentContentChangeEvent {
@@ -188,8 +182,8 @@ impl TextBuffer {
         self.caret_char_pos + (self.caret_is_trailing as usize)
     }
 
-    pub fn scroll_down(&mut self) {
-        let new_top = self.top_line + MOUSEWHEEL_LINES_PER_ROLL;
+    pub fn scroll_down(&mut self, lines_per_roll: usize) {
+        let new_top = self.top_line + lines_per_roll;
         if new_top >= self.buffer.len_lines() {
             self.top_line = self.buffer.len_lines() - 1;
         }
@@ -199,9 +193,9 @@ impl TextBuffer {
         self.update_absolute_char_positions();
     }
 
-    pub fn scroll_up(&mut self) {
-        if self.top_line >= MOUSEWHEEL_LINES_PER_ROLL {
-            self.top_line -= MOUSEWHEEL_LINES_PER_ROLL;
+    pub fn scroll_up(&mut self, lines_per_roll: usize) {
+        if self.top_line >= lines_per_roll {
+            self.top_line -= lines_per_roll;
         }
         else {
             self.top_line = 0;
@@ -411,6 +405,13 @@ impl TextBuffer {
 
                 self.caret_char_pos = self.buffer.line_to_char(target_line_idx) + new_offset;
                 self.caret_is_trailing = 0;
+
+                if target_line_idx >= self.bot_line {
+                    self.scroll_down(1);
+                }
+                else if target_line_idx < self.top_line {
+                    self.scroll_up(1);
+                }
             },
         }
 
@@ -497,6 +498,7 @@ impl TextBuffer {
             };
         }
         self.caret_is_trailing = 0;
+        self.update_absolute_char_positions();
 
         // Return the change event
         return change_event;
@@ -707,7 +709,122 @@ impl TextBuffer {
         return DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![self.delete_selection()]);
     }
 
-    pub fn get_semantic_highlighting(&mut self) -> Vec<(DWRITE_TEXT_RANGE, SemanticTokenTypes)> {
+    // Parses and creates ranges of highlight information directly
+    // from the text buffer displayed on the screen
+    pub fn get_lexical_highlights(&mut self) -> Vec<(DWRITE_TEXT_RANGE, SemanticTokenTypes)> {
+        match self.language_identifier {
+            CPP_LANGUAGE_IDENTIFIER => {
+                let mut highlights = Vec::new();
+                let top_line_absolute_pos = self.buffer.line_to_char(self.top_line);
+
+                let mut multiline_start_position = 0;
+                for line in self.top_line..min(self.buffer.len_lines(), self.bot_line) {
+                    if line >= self.buffer.len_lines() {
+                        break;
+                    }
+
+                    let line_absolute_pos = self.buffer.line_to_char(line);
+                    let slice = self.buffer.line(line);
+
+                    let mut identifier = String::from("");
+                    let mut char_pos = 0;
+                    let mut was_forward_slash = false;
+                    let mut was_star = false;
+                    let mut string_literal_start_position = std::usize::MAX;
+                    for chr in slice.chars() {
+                        if chr.is_ascii_digit() {
+                            let range = DWRITE_TEXT_RANGE {
+                                startPosition: ((line_absolute_pos + char_pos as usize) - top_line_absolute_pos) as u32,
+                                length: 1
+                            };
+                            highlights.push((range, SemanticTokenTypes::Literal));
+                            string_literal_start_position = std::usize::MAX;
+                            was_star = false;
+                            was_forward_slash = false;
+                        }
+                        else if chr == '"' {
+                            if string_literal_start_position != std::usize::MAX {
+                                let range = DWRITE_TEXT_RANGE {
+                                    startPosition: ((line_absolute_pos + string_literal_start_position as usize) - top_line_absolute_pos) as u32,
+                                    length: ((char_pos + 1) - string_literal_start_position) as u32
+                                };
+                                highlights.push((range, SemanticTokenTypes::Literal));
+                                string_literal_start_position = std::usize::MAX;
+                            }
+                            else {
+                                string_literal_start_position = char_pos;
+                            }
+                            was_star = false;
+                            was_forward_slash = false;
+                        }
+                        else if chr == '/' {
+                            if was_forward_slash {
+                                let range = DWRITE_TEXT_RANGE {
+                                    startPosition: ((line_absolute_pos + (char_pos - 1) as usize) - top_line_absolute_pos) as u32,
+                                    length: (slice.len_chars() - char_pos) as u32
+                                };
+                                highlights.push((range, SemanticTokenTypes::Comment));
+
+                                // Break here since the rest of the line is commented out anyway
+                                break;
+                            }
+                            else if was_star {
+                                let position = (line_absolute_pos + (char_pos + 1) as usize) - top_line_absolute_pos;
+                                let range = DWRITE_TEXT_RANGE {
+                                    startPosition: multiline_start_position as u32,
+                                    length: (position - multiline_start_position as usize) as u32
+                                };
+                                highlights.push((range, SemanticTokenTypes::Comment));
+                            }
+                            was_star = false;
+                            was_forward_slash = true;
+                        }
+                        else if chr == '*' {
+                            if was_forward_slash {
+                                multiline_start_position = (line_absolute_pos + (char_pos - 1) as usize) - top_line_absolute_pos;
+                            }
+                            was_star = true;
+                            was_forward_slash = false;
+                        }
+                        else if self.is_linebreak(chr) || chr == ' ' || chr == '\t' {
+                            if CPP_KEYWORDS.contains(&identifier.as_str()) {
+                                let range = DWRITE_TEXT_RANGE {
+                                    startPosition: ((line_absolute_pos + (char_pos - identifier.len()) as usize) - top_line_absolute_pos) as u32,
+                                    length: identifier.len() as u32
+                                };
+                                highlights.push((range, SemanticTokenTypes::Keyword));
+                                identifier = String::from("");
+                            }
+                            else if identifier.starts_with("#") {
+                                let range = DWRITE_TEXT_RANGE {
+                                    startPosition: ((line_absolute_pos + (char_pos - identifier.len()) as usize) - top_line_absolute_pos) as u32,
+                                    length: identifier.len() as u32
+                                };
+                                highlights.push((range, SemanticTokenTypes::Preprocessor));
+                                identifier = String::from("");
+                            }
+                            was_star = false;
+                            was_forward_slash = false;
+                        }
+                        else {
+                            was_star = false;
+                            was_forward_slash = false;
+                            identifier.push(chr);
+                        }
+                        char_pos += 1;
+                    }
+                }
+        
+                highlights
+            },
+            // For rust we let the language server do all the work
+            RUST_LANGUAGE_IDENTIFIER | _ => Vec::new()
+        }
+
+    }
+
+    // Processes the semantic tokens received from the language server
+    pub fn get_semantic_highlights(&mut self) -> Vec<(DWRITE_TEXT_RANGE, SemanticTokenTypes)> {
         let top_line_absolute_pos = self.buffer.line_to_char(self.top_line);
         let mut highlights = Vec::new();
 
@@ -718,7 +835,7 @@ impl TextBuffer {
         let mut start = 0;
 
         while i < self.semantic_tokens.len() {
-            let delta_line      = self.semantic_tokens[i];
+            let delta_line = self.semantic_tokens[i];
             line += delta_line;
 
             // Early continue if line is above the current view
@@ -727,18 +844,18 @@ impl TextBuffer {
                 i += 5;
                 continue;
             }
-            else if line > self.bot_line as u32 {
+            else if line > min(self.buffer.len_lines(), self.bot_line) as u32 {
                 break;
             }
 
-            let delta_start     = self.semantic_tokens[i + 1];
+            let delta_start = self.semantic_tokens[i + 1];
             if delta_line == 0 {
                 start += delta_start;
             }
             else {
                 start = delta_start;
             }
-            let length          = self.semantic_tokens[i + 2];
+            let length = self.semantic_tokens[i + 2];
 
             match self.language_identifier {
                 CPP_LANGUAGE_IDENTIFIER => {
@@ -922,6 +1039,13 @@ impl TextBuffer {
     }
 
     fn update_absolute_char_positions(&mut self) {
+        // If the line count is less than the top line
+        // the top line should be set to the actual line count.
+        // self.top_line is 0-indexed thus the +1 (and -1)
+        let line_count = self.buffer.len_lines();
+        if  line_count < (self.top_line + 1) {
+            self.top_line = line_count - 1;
+        }
         self.bot_line = self.top_line + (self.text_visible_line_count - 1);
         self.absolute_char_pos_start = self.buffer.line_to_char(self.top_line);
         if self.bot_line >= self.buffer.len_lines() {

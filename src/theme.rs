@@ -29,7 +29,8 @@ pub struct Theme {
     pub enum_brush: *mut ID2D1SolidColorBrush,
     pub comment_brush: *mut ID2D1SolidColorBrush,
     pub keyword_brush: *mut ID2D1SolidColorBrush,
-    pub literal_brush: *mut ID2D1SolidColorBrush
+    pub literal_brush: *mut ID2D1SolidColorBrush,
+    pub macro_preprocessor_brush: *mut ID2D1SolidColorBrush
 }
 
 impl Default for Theme {
@@ -47,7 +48,8 @@ impl Default for Theme {
             enum_brush: null_mut(),
             comment_brush: null_mut(),
             keyword_brush: null_mut(),
-            literal_brush: null_mut()
+            literal_brush: null_mut(),
+            macro_preprocessor_brush: null_mut()
         }
     }
 }
@@ -67,7 +69,8 @@ impl Theme {
             enum_brush: null_mut(),
             comment_brush: null_mut(),
             keyword_brush: null_mut(),
-            literal_brush: null_mut()
+            literal_brush: null_mut(),
+            macro_preprocessor_brush: null_mut()
         };
 
         let brush_properties = D2D1_BRUSH_PROPERTIES {
@@ -80,13 +83,14 @@ impl Theme {
         const CARET_COLOR: D3DCOLORVALUE = create_color(0xFE8019FF);
         const SELECTION_COLOR: D3DCOLORVALUE = create_color(0x0F52BAFF);
         const VARIABLE_COLOR: D3DCOLORVALUE = create_color(0xADD8E6FF);
-        const FUNCTION_COLOR: D3DCOLORVALUE = create_color(0xFABD2FFF);
-        const METHOD_COLOR: D3DCOLORVALUE = create_color(0xD79921FF);
+        const FUNCTION_COLOR: D3DCOLORVALUE = create_color(0xFBD06DFF);
+        const METHOD_COLOR: D3DCOLORVALUE = create_color(0xFABD2FFF);
         const CLASS_COLOR: D3DCOLORVALUE = create_color(0xFB4934FF);
         const ENUM_COLOR: D3DCOLORVALUE = create_color(0xFB4934FF);
         const COMMENT_COLOR: D3DCOLORVALUE = create_color(0x66e599FF);
         const KEYWORD_COLOR: D3DCOLORVALUE = create_color(0xD3869BFF);
         const LITERAL_COLOR: D3DCOLORVALUE = create_color(0xFE8019FF);
+        const MACRO_PREPROCESSOR_COLOR: D3DCOLORVALUE = create_color(0xAFEEEEFF);
 
         unsafe {
             dx_ok!((*target).CreateSolidColorBrush(&TEXT_COLOR, &brush_properties, &mut theme.text_brush as *mut *mut _));
@@ -101,6 +105,7 @@ impl Theme {
             dx_ok!((*target).CreateSolidColorBrush(&COMMENT_COLOR, &brush_properties, &mut theme.comment_brush as *mut *mut _));
             dx_ok!((*target).CreateSolidColorBrush(&KEYWORD_COLOR, &brush_properties, &mut theme.keyword_brush as *mut *mut _));
             dx_ok!((*target).CreateSolidColorBrush(&LITERAL_COLOR, &brush_properties, &mut theme.literal_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&MACRO_PREPROCESSOR_COLOR, &brush_properties, &mut theme.macro_preprocessor_brush as *mut *mut _));
         }
 
         theme

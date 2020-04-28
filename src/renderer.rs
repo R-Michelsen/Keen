@@ -21,7 +21,7 @@ use winapi::{
         },
         d2d1::{
             ID2D1Factory, ID2D1HwndRenderTarget, D2D1CreateFactory,
-            ID2D1Brush, ID2D1SolidColorBrush, D2D1_LAYER_PARAMETERS,
+            ID2D1Brush, D2D1_LAYER_PARAMETERS,
             D2D1_LAYER_OPTIONS_INITIALIZE_FOR_CLEARTYPE,
             D2D1_PRESENT_OPTIONS_NONE,
             D2D1_POINT_2F, D2D1_MATRIX_3X2_F, D2D1_SIZE_U, D2D1_RECT_F,
@@ -303,18 +303,36 @@ impl TextRenderer {
             let (text_layout, text_layer_params) = text_buffer.get_text_layout();
             (*self.target).PushLayer(&text_layer_params, null_mut());
 
-            let highlights = text_buffer.get_semantic_highlighting();
-            for (range, token_type) in highlights {
+            let lexical_highlights = text_buffer.get_lexical_highlights();
+            let semantic_highlights = text_buffer.get_semantic_highlights();
+            for (range, token_type) in lexical_highlights {
                 match token_type {
-                    SemanticTokenTypes::None     => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.text_brush as *mut IUnknown, range)); },
-                    SemanticTokenTypes::Variable => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.variable_brush as *mut IUnknown, range)); },
-                    SemanticTokenTypes::Function => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.function_brush as *mut IUnknown, range)); },
-                    SemanticTokenTypes::Method   => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.method_brush as *mut IUnknown, range)); },
-                    SemanticTokenTypes::Class    => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.class_brush as *mut IUnknown, range)); },
-                    SemanticTokenTypes::Enum     => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.enum_brush as *mut IUnknown, range)); }
-                    SemanticTokenTypes::Comment  => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.comment_brush as *mut IUnknown, range)); }
-                    SemanticTokenTypes::Keyword  => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.keyword_brush as *mut IUnknown, range)); }
-                    SemanticTokenTypes::Literal   => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.literal_brush as *mut IUnknown, range)); }
+                    SemanticTokenTypes::None              => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.text_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::Variable          => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.variable_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::Function          => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.function_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::Method            => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.method_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::Class             => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.class_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::Enum              => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.enum_brush as *mut IUnknown, range)); }
+                    SemanticTokenTypes::Comment           => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.comment_brush as *mut IUnknown, range)); }
+                    SemanticTokenTypes::Keyword           => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.keyword_brush as *mut IUnknown, range)); }
+                    SemanticTokenTypes::Literal           => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.literal_brush as *mut IUnknown, range)); }
+                    SemanticTokenTypes::Macro             => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.macro_preprocessor_brush as *mut IUnknown, range)); }
+                    SemanticTokenTypes::Preprocessor      => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.macro_preprocessor_brush as *mut IUnknown, range)); }
+                }
+            }
+            for (range, token_type) in semantic_highlights {
+                match token_type {
+                    SemanticTokenTypes::None              => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.text_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::Variable          => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.variable_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::Function          => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.function_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::Method            => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.method_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::Class             => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.class_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::Enum              => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.enum_brush as *mut IUnknown, range)); }
+                    SemanticTokenTypes::Comment           => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.comment_brush as *mut IUnknown, range)); }
+                    SemanticTokenTypes::Keyword           => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.keyword_brush as *mut IUnknown, range)); }
+                    SemanticTokenTypes::Literal           => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.literal_brush as *mut IUnknown, range)); }
+                    SemanticTokenTypes::Macro             => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.macro_preprocessor_brush as *mut IUnknown, range)); }
+                    SemanticTokenTypes::Preprocessor      => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.macro_preprocessor_brush as *mut IUnknown, range)); }
                 }
             }
 

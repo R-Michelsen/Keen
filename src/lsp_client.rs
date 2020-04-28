@@ -9,14 +9,13 @@ use winapi::{shared::windef::HWND, um::winuser::SendMessageW};
 use serde_json::to_value;
 
 use crate::lsp_structs::*;
-use crate::settings::*;
 use crate::WM_LSP_RESPONSE;
 use crate::WM_LSP_CRASH;
 use crate::settings::MAX_LSP_RESPONSE_SIZE;
 
 #[derive(Clone, Debug)]
 pub enum LSPRequestType {
-    InitializationRequest,
+    InitializationRequest(String),
     SemanticTokenRequest(String)
 }
 
@@ -43,7 +42,7 @@ impl LSPClient {
         let mut stdout = lsp.stdout.take().unwrap();
         let hwnd_clone = hwnd as u64;
 
-        let mut lsp_client = LSPClient {
+        LSPClient {
             client_name,
             request_id: 0,
             request_types: Vec::new(),
@@ -98,10 +97,7 @@ impl LSPClient {
                     }
                 }
             })
-        };
-
-        lsp_client.send_initialize_request();
-        lsp_client
+        }
     }
 
     pub fn send_request(&mut self, request: &str, request_type: LSPRequestType) {
@@ -147,7 +143,7 @@ impl LSPClient {
         self.send_request(serialized_semantic_token_request.as_str(), LSPRequestType::SemanticTokenRequest(uri));
     }
 
-    pub fn send_initialize_request(&mut self) {
+    pub fn send_initialize_request(&mut self, path: String) {
         let initialization_options;
         match self.client_name {
             CPP_LSP_SERVER => {
@@ -189,13 +185,7 @@ impl LSPClient {
                         implementation: None,
                         references: None,
                         document_highlight: None,
-                        document_symbol: Some(DocumentSymbolClientCapabilities {
-                            dynamic_registration: Some(true),
-                            symbol_kind: Some(SymbolKindValues {
-                                value_set: Some((1..27).collect()),
-                            }),
-                            hierarchical_document_symbol_support: Some(true),
-                        }),
+                        document_symbol: None,
                         code_action: None,
                         code_lens: None,
                         document_link: None,
@@ -207,14 +197,7 @@ impl LSPClient {
                         publish_diagnostics: None,
                         folding_range: None,
                         selection_range: None,
-                        semantic_tokens: Some(SemanticTokensClientCapabilities {
-                            dynamic_registration: Some(true),
-                            token_types: Some(vec!["comment".to_owned(), "keyword".to_owned(), "number".to_owned(), "regexp".to_owned(), "operator".to_owned(), 
-                            "namespace".to_owned(), "type".to_owned(), "struct".to_owned(), "class".to_owned(), "interface".to_owned(), "enum".to_owned(), "typeParameter".to_owned(), 
-                            "function".to_owned(), "member".to_owned(), "macro".to_owned(), "variable".to_owned(), "parameter".to_owned(), "property".to_owned(), "label".to_owned()]),
-                            token_modifiers: Some(vec!["declaration".to_owned(), "documentation".to_owned(), "static".to_owned(), "abstract".to_owned(),
-                            "deprecated".to_owned(), "readonly".to_owned()])
-                        }),
+                        semantic_tokens: None
                     }),
                     window: None,
                     experimental: None
@@ -226,6 +209,6 @@ impl LSPClient {
         };
 
         let serialized_init_request = serde_json::to_string(&init_request).unwrap();
-        self.send_request(serialized_init_request.as_str(), LSPRequestType::InitializationRequest);
+        self.send_request(serialized_init_request.as_str(), LSPRequestType::InitializationRequest(path));
     }
 }

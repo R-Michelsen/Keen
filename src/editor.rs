@@ -59,38 +59,21 @@ impl Editor {
         }
     }
 
-    pub fn start_language_server(&mut self, path: &str) {
-        let os_path = Path::new(path);
-        let extension = os_path.extension().unwrap().to_str().unwrap();
-
-        match &self.lsp_client {
-            None if CPP_FILE_EXTENSIONS.contains(&extension) => {
-                self.lsp_client = Some(LSPClient::new(self.hwnd.clone(), CPP_LSP_SERVER));
-            },
-            None if RUST_FILE_EXTENSIONS.contains(&extension) => {
-                self.lsp_client = Some(LSPClient::new(self.hwnd.clone(), RUST_LSP_SERVER));
-            },
-            _ => {} 
-        }
-    }
-
     pub fn open_file(&mut self, path: &str) {
         let file_prefix = "file:///".to_owned();
-        let lsp_client = self.lsp_client.as_mut().unwrap();
         let os_path = Path::new(path);
         let extension = os_path.extension().unwrap().to_str().unwrap();
 
-        let text = std::fs::read_to_string(os_path).unwrap();
-
-        let mut language_identifier = "";
+        let language_identifier = 
         if CPP_FILE_EXTENSIONS.contains(&extension) {
-            language_identifier = CPP_LANGUAGE_IDENTIFIER;
-            lsp_client.send_open_file_notification(file_prefix.clone() + path, language_identifier.to_owned(), text);
+            CPP_LANGUAGE_IDENTIFIER
         }
         else if RUST_FILE_EXTENSIONS.contains(&extension) {
-            language_identifier = RUST_LANGUAGE_IDENTIFIER;
-            lsp_client.send_open_file_notification(file_prefix.clone() + path, language_identifier.to_owned(), text);
+            RUST_LANGUAGE_IDENTIFIER
         }
+        else {
+            ""
+        };
 
         self.buffers.insert(
             file_prefix.clone() + path,
@@ -104,6 +87,26 @@ impl Editor {
         );
         self.current_buffer = file_prefix.clone() + path;
 
+        // If the LSP Client is not yet running, create an instance
+        // we then return since we will handle the open file request
+        // once the LSP Client is actually initialized.
+        match &self.lsp_client {
+            None if CPP_FILE_EXTENSIONS.contains(&extension) => {
+                self.lsp_client = Some(LSPClient::new(self.hwnd.clone(), CPP_LSP_SERVER));
+                self.lsp_client.as_mut().unwrap().send_initialize_request(path.to_owned());
+                return;
+            },
+            None if RUST_FILE_EXTENSIONS.contains(&extension) => {
+                self.lsp_client = Some(LSPClient::new(self.hwnd.clone(), RUST_LSP_SERVER));
+                self.lsp_client.as_mut().unwrap().send_initialize_request(path.to_owned());
+                return;
+            },
+            _ => {}
+        }
+
+        let lsp_client = self.lsp_client.as_mut().unwrap();
+        let text = std::fs::read_to_string(os_path).unwrap();
+        lsp_client.send_open_file_notification(file_prefix.clone() + path, language_identifier.to_owned(), text);
         lsp_client.send_semantic_token_request(file_prefix + path);
     }
 
@@ -152,20 +155,41 @@ impl Editor {
 
     pub fn process_language_server_response(&mut self, response: &str) {
         // Don't handle requests from server
-        
         if response.contains("method") {
             return;
         }
 
         let response_id = self.get_response_id(response);
         let lsp_client = self.lsp_client.as_mut().unwrap();
-        let request_type = &lsp_client.request_types[response_id as usize];
+        let request_type = lsp_client.request_types[response_id as usize].clone();
 
         match request_type {
-            LSPRequestType::InitializationRequest => lsp_client.send_initialized_notification(),
+            LSPRequestType::InitializationRequest(path) => {
+                // Send init notification
+                lsp_client.send_initialized_notification();
+
+                // Then open the file that triggered the LSP creation
+                let file_prefix = "file:///".to_owned();
+                let os_path = Path::new(path.as_str());
+                let extension = os_path.extension().unwrap().to_str().unwrap();
+        
+                let language_identifier = 
+                if CPP_FILE_EXTENSIONS.contains(&extension) {
+                    CPP_LANGUAGE_IDENTIFIER
+                }
+                else if RUST_FILE_EXTENSIONS.contains(&extension) {
+                    RUST_LANGUAGE_IDENTIFIER
+                }
+                else {
+                    ""
+                };
+                let text = std::fs::read_to_string(os_path).unwrap();
+                lsp_client.send_open_file_notification(file_prefix.clone() + path.as_str(), language_identifier.to_owned(), text);
+                lsp_client.send_semantic_token_request(file_prefix + path.as_str());
+            },
             LSPRequestType::SemanticTokenRequest(uri) => {
                 // Get the buffer for which the semantic token request was issued
-                let buffer = self.buffers.get_mut(uri).unwrap();
+                let buffer = self.buffers.get_mut(&uri).unwrap();
                 let semantic_tokens: SemanticTokenResponse = serde_json::from_str(response).unwrap();
 
                 // Update the semantic tokens of the buffer if they are updated
@@ -193,8 +217,6 @@ impl Editor {
     }
 
     pub fn execute_command(&mut self, cmd: EditorCommand) {
-        let lsp_client = self.lsp_client.as_mut().unwrap();
-
         if let Some(buffer) = self.buffers.get_mut(&self.current_buffer) {
             match cmd {
                 EditorCommand::CaretVisible | EditorCommand::CaretInvisible if self.force_visible_caret_timer > 0 => {
@@ -204,10 +226,10 @@ impl Editor {
                 EditorCommand::CaretVisible => self.caret_is_visible = true,
                 EditorCommand::CaretInvisible => self.caret_is_visible = false,
                 EditorCommand::ScrollUp => {
-                    buffer.scroll_up();
+                    buffer.scroll_up(MOUSEWHEEL_LINES_PER_ROLL);
                 },
                 EditorCommand::ScrollDown => { 
-                    buffer.scroll_down();
+                    buffer.scroll_down(MOUSEWHEEL_LINES_PER_ROLL);
                 },
                 EditorCommand::LeftClick(mouse_pos, shift_down) => {
                     buffer.left_click(mouse_pos, shift_down);
@@ -231,28 +253,44 @@ impl Editor {
                         (VK_UP, _)         => buffer.set_selection(SelectionMode::Up, 1, shift_down),
                         (VK_TAB, _)        => {
                             let did_change_notification = buffer.insert_chars(" ".repeat(NUMBER_OF_SPACES_PER_TAB).as_str());
-                            Editor::process_document_change(did_change_notification, buffer, lsp_client)
+                            if let Some(lsp_client) = self.lsp_client.as_mut() {
+                                Editor::process_document_change(did_change_notification, buffer, lsp_client);
+                            }
                         },
-                        (VK_RETURN, true)  => lsp_client.send_semantic_token_request(buffer.get_uri()),
+                        (VK_RETURN, true)  => {
+                            if let Some(lsp_client) = self.lsp_client.as_mut() {
+                                lsp_client.send_semantic_token_request(buffer.get_uri());
+                            }
+                        },
                         (VK_RETURN, false) => {
                             let did_change_notification = buffer.insert_chars("\r\n");
-                            Editor::process_document_change(did_change_notification, buffer, lsp_client)
+                            if let Some(lsp_client) = self.lsp_client.as_mut() {
+                                Editor::process_document_change(did_change_notification, buffer, lsp_client);
+                            }
                         },
                         (VK_DELETE, false) => {
                             let did_change_notification = buffer.delete_right();
-                            Editor::process_document_change(did_change_notification, buffer, lsp_client)
+                            if let Some(lsp_client) = self.lsp_client.as_mut() {
+                                Editor::process_document_change(did_change_notification, buffer, lsp_client);
+                            }
                         },
                         (VK_DELETE, true) => {
                             let did_change_notification = buffer.delete_right_by_word();
-                            Editor::process_document_change(did_change_notification, buffer, lsp_client)
+                            if let Some(lsp_client) = self.lsp_client.as_mut() {
+                                Editor::process_document_change(did_change_notification, buffer, lsp_client);
+                            }
                         },
                         (VK_BACK, false) => {
                             let did_change_notification = buffer.delete_left();
-                            Editor::process_document_change(did_change_notification, buffer, lsp_client)
+                            if let Some(lsp_client) = self.lsp_client.as_mut() {
+                                Editor::process_document_change(did_change_notification, buffer, lsp_client);
+                            }
                         },
                         (VK_BACK, true) => {
                             let did_change_notification = buffer.delete_left_by_word();
-                            Editor::process_document_change(did_change_notification, buffer, lsp_client)
+                            if let Some(lsp_client) = self.lsp_client.as_mut() {
+                                Editor::process_document_change(did_change_notification, buffer, lsp_client);
+                            }
                         },
                         _ => {}
                     }
@@ -260,25 +298,14 @@ impl Editor {
                 }
                 EditorCommand::CharInsert(character) => {
                     let did_change_notification = buffer.insert_char(character);
-                    Editor::process_document_change(did_change_notification, buffer, lsp_client);
+                    if let Some(lsp_client) = self.lsp_client.as_mut() {
+                        Editor::process_document_change(did_change_notification, buffer, lsp_client);
+                    }
                     self.force_caret_visible();
                 }
                 EditorCommand::LSPClientCrash(client) => {
                     println!("The {} language server has crashed!", client);
                 }
-            }
-        }
-        else {
-            match cmd {
-                EditorCommand::KeyPressed(key, _, ctrl_down) => { 
-                    match (key, ctrl_down) {
-                        // (VK_RETURN, true)  => self.open_file("C:/llvm-project/clang/lib/CodeGen/CGBuiltin.cpp"),
-                        // (VK_RETURN, true)  => self.open_file("C:/Users/Rasmus/Desktop/Yarr/source/AppEditorLogic.cpp"),
-                        (VK_RETURN, true)  => self.open_file("C:/Users/Rasmus/Desktop/keen/src/editor.rs"),
-                        _ => {}
-                    }
-                }
-                _ => {}
             }
         }
     }

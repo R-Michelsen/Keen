@@ -1,6 +1,23 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub const CPP_KEYWORDS: [&str; 92] = ["alignas", "alignof", "and", "and_eq", "asm", 
+"auto", "bitand", "bitor", "bool", "break", "case", "catch", "char", "char8_t", "char16_t", 
+"char32_t", "class", "compl", "concept", "const", "consteval", "constexpr", "constinit", 
+"const_cast", "continue", "co_await", "co_return", "co_yield", "decltype", "default", "delete", 
+"do", "double", "dynamic_cast", "else", "enum", "explicit", "export", "extern", "false", "float", 
+"for", "friend", "goto", "if", "inline", "int", "long", "mutable", "namespace", "new", "noexcept", "not", 
+"not_eq", "nullptr", "operator", "or", "or_eq", "private", "protected", "public", "register", "reinterpret_cast", 
+"requires", "return", "short", "signed", "sizeof", "static", "static_assert", "static_cast", "struct", "switch", 
+"template", "this", "thread_local", "throw", "true", "try", "typedef", "typeid", "typename", "union", "unsigned", "using", 
+"virtual", "void", "volatile", "wchar_t", "while", "xor", "xor_eq"];
+pub const CPP_FILE_EXTENSIONS: [&str; 5] = ["c", "h", "cpp", "hpp", "cxx"];
+pub const CPP_LSP_SERVER: &str = "clangd";
+pub const CPP_LANGUAGE_IDENTIFIER: &str = "cpp";
+pub const RUST_FILE_EXTENSIONS: [&str; 1] = ["rs"];
+pub const RUST_LSP_SERVER: &str = "rust-analyzer";
+pub const RUST_LANGUAGE_IDENTIFIER: &str = "rust";
+
 type DocumentUri = String;
 type MarkupKind = String;
 type CodeActionKind = String;
@@ -12,6 +29,7 @@ type TextDocumentSymbolKind = i64;
 type SemanticTokenType = String;
 type SemanticTokenModifier = String;
 
+#[allow(dead_code)]
 pub enum CompletionItemKinds {
 	Text = 1,
 	Method = 2,
@@ -40,6 +58,7 @@ pub enum CompletionItemKinds {
 	TypeParameter = 25
 }
 
+#[allow(dead_code)]
 pub enum SymbolKinds {
 	File = 1,
 	Module = 2,
@@ -69,10 +88,12 @@ pub enum SymbolKinds {
 	TypeParameter = 26
 }
 
+#[allow(dead_code)]
 pub enum CompletionItemTags {
     Deprecrated = 1
 }
 
+#[allow(dead_code)]
 pub enum ErrorCodes {
 	ParseError = -32700,
 	InvalidRequest = -32600,
@@ -87,6 +108,7 @@ pub enum ErrorCodes {
 	ContentModified = -32801
 }
 
+#[allow(dead_code)]
 pub enum TextDocumentSymbolKinds {
     None = 0,
     Full = 1,
@@ -102,7 +124,9 @@ pub enum SemanticTokenTypes {
     Enum,
     Comment,
     Keyword,
-    Literal
+    Literal,
+    Macro,
+    Preprocessor
 }
 
 #[derive(Debug)]
@@ -159,7 +183,7 @@ impl CppSemanticTokenTypes {
     pub fn to_semantic_token_type(cpp_token_type: CppSemanticTokenTypes) -> SemanticTokenTypes {
         match cpp_token_type {
             CppSemanticTokenTypes::Variable          => SemanticTokenTypes::Variable, 
-            CppSemanticTokenTypes::LocalVariable     => SemanticTokenTypes::None,
+            CppSemanticTokenTypes::LocalVariable     => SemanticTokenTypes::Variable,
             CppSemanticTokenTypes::Parameter         => SemanticTokenTypes::None,
             CppSemanticTokenTypes::Function          => SemanticTokenTypes::Function,
             CppSemanticTokenTypes::Method            => SemanticTokenTypes::Method,
@@ -176,9 +200,8 @@ impl CppSemanticTokenTypes {
             CppSemanticTokenTypes::TemplateParameter => SemanticTokenTypes::None,
             CppSemanticTokenTypes::Concept           => SemanticTokenTypes::None,
             CppSemanticTokenTypes::Primitive         => SemanticTokenTypes::None,
-            CppSemanticTokenTypes::Macro             => SemanticTokenTypes::None,
-            CppSemanticTokenTypes::InactiveCode      => SemanticTokenTypes::None,
-            CppSemanticTokenTypes::Variable          => SemanticTokenTypes::None
+            CppSemanticTokenTypes::Macro             => SemanticTokenTypes::Macro,
+            CppSemanticTokenTypes::InactiveCode      => SemanticTokenTypes::None
         }
     }
 }
@@ -266,7 +289,7 @@ impl RustSemanticTokenTypes {
             RustSemanticTokenTypes::Function            => SemanticTokenTypes::Function,
             RustSemanticTokenTypes::Member              => SemanticTokenTypes::None,
             RustSemanticTokenTypes::Property            => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::Macro               => SemanticTokenTypes::None,
+            RustSemanticTokenTypes::Macro               => SemanticTokenTypes::Macro,
             RustSemanticTokenTypes::Variable            => SemanticTokenTypes::Variable,
             RustSemanticTokenTypes::Parameter           => SemanticTokenTypes::None,
             RustSemanticTokenTypes::Label               => SemanticTokenTypes::None,
@@ -276,7 +299,7 @@ impl RustSemanticTokenTypes {
             RustSemanticTokenTypes::Lifetime            => SemanticTokenTypes::None,
             RustSemanticTokenTypes::TypeAlias           => SemanticTokenTypes::None,
             RustSemanticTokenTypes::Union               => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::UnresolvedReference => SemanticTokenTypes::None,
+            RustSemanticTokenTypes::UnresolvedReference => SemanticTokenTypes::None
         }
     }
 }
@@ -299,18 +322,18 @@ pub enum RustSemanticTokenModifiers {
 impl RustSemanticTokenModifiers {
     pub fn from_u32(uint: u32) -> RustSemanticTokenModifiers {
         match uint {
-            0 => RustSemanticTokenModifiers::Documentation,
-            1 => RustSemanticTokenModifiers::Declaration,
-            2 => RustSemanticTokenModifiers::Definition,
-            3 => RustSemanticTokenModifiers::Static,
-            4 => RustSemanticTokenModifiers::Abstract,
-            5 => RustSemanticTokenModifiers::Deprecated,
-            6 => RustSemanticTokenModifiers::Readonly,
-            7 => RustSemanticTokenModifiers::Constant,
-            8 => RustSemanticTokenModifiers::Mutable,
-            9 => RustSemanticTokenModifiers::Unsafe,
+            0  => RustSemanticTokenModifiers::Documentation,
+            1  => RustSemanticTokenModifiers::Declaration,
+            2  => RustSemanticTokenModifiers::Definition,
+            3  => RustSemanticTokenModifiers::Static,
+            4  => RustSemanticTokenModifiers::Abstract,
+            5  => RustSemanticTokenModifiers::Deprecated,
+            6  => RustSemanticTokenModifiers::Readonly,
+            7  => RustSemanticTokenModifiers::Constant,
+            8  => RustSemanticTokenModifiers::Mutable,
+            9  => RustSemanticTokenModifiers::Unsafe,
             10 => RustSemanticTokenModifiers::ControlFlow,
-            _ => RustSemanticTokenModifiers::Documentation
+            _  => RustSemanticTokenModifiers::Documentation
         }
     }
 }
@@ -1236,6 +1259,7 @@ pub struct SemanticTokensRegistrationOptions {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct ServerCapabilities {
      text_document_sync: Option<TextDocumentSync>,
      completion_provider: Option<CompletionOptions>,
