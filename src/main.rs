@@ -1,13 +1,17 @@
 #![feature(new_uninit)]
-
+#![feature(const_fn)]
 #![windows_subsystem = "console"]
 
 mod editor;
 mod renderer;
+mod theme;
 mod buffer;
+mod lsp_client;
+mod lsp_structs;
 mod settings;
 
 use std::{
+    alloc::{dealloc, Layout},
     ffi::OsStr,
     mem::MaybeUninit,
     os::windows::ffi::OsStrExt,
@@ -60,9 +64,12 @@ use winapi::{
 };
 
 use editor::{ Editor, EditorCommand };
+use settings::MAX_LSP_RESPONSE_SIZE;
 
-const WM_CARET_VISIBLE: u32 = 0xC000;
-const WM_CARET_INVISIBLE: u32 = 0xC001;
+const WM_CARET_VISIBLE:     u32 = 0xC000;
+const WM_CARET_INVISIBLE:   u32 = 0xC001;
+const WM_LSP_RESPONSE:      u32 = 0xC002;
+const WM_LSP_CRASH:         u32 = 0xC003; 
 
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let editor: *mut Editor;
@@ -76,8 +83,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         // Set the box to be carried over to subsequent callbacks
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, (*uninit_editor).as_mut_ptr() as isize);
         editor = (*uninit_editor).as_mut_ptr();
-        //(*editor).open_file("C:/llvm-project/clang/include/clang/CodeGen/CGFunctionInfo.h");
-        (*editor).open_file("C:/Users/Rasmus/Desktop/keen/src/editor.rs");
+        // (*editor).start_language_server("C:/Users/Rasmus/Desktop/Yarr/source/AppEditorLogic.cpp");
+        (*editor).start_language_server("C:/Users/Rasmus/Desktop/keen/src/editor.rs");
+        // (*editor).open_file("C:/Users/Rasmus/Desktop/Yarr/source/AppEditorLogic.cpp");
+        // (*editor).open_file("C:/Users/Rasmus/Desktop/keen/src/editor.rs");
     }
     else {
         editor = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Editor;
@@ -87,6 +96,25 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
     let ctrl_down = (GetKeyState(VK_CONTROL) & 0x80) != 0;
 
     match msg {
+        WM_LSP_RESPONSE => {
+            let data = wparam as *mut u8;
+            let range = std::mem::transmute::<isize, (i32, i32)>(lparam); 
+            let slice: &[u8] = core::slice::from_raw_parts_mut(data.offset(range.0 as isize), range.1 as usize);
+            let response = std::str::from_utf8(slice).unwrap();
+            (*editor).process_language_server_response(response);
+            
+            // We have to deallocte the buffer holding the response here,
+            // it is NOT done by the LSP thread itself
+            dealloc(data, Layout::from_size_align(MAX_LSP_RESPONSE_SIZE, 8).unwrap());
+            InvalidateRect(hwnd, null_mut(), false as i32);
+            return 0;
+        },
+        WM_LSP_CRASH => {
+            let len = lparam as usize;
+            let client = std::str::from_utf8(std::slice::from_raw_parts(wparam as *const u8, len)).unwrap();
+            (*editor).execute_command(EditorCommand::LSPClientCrash(client));
+            return 0;
+        },
         WM_CARET_VISIBLE => {
             (*editor).execute_command(EditorCommand::CaretVisible);
             InvalidateRect(hwnd, null_mut(), false as i32);

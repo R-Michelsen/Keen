@@ -23,7 +23,7 @@ use winapi::{
             ID2D1Factory, ID2D1HwndRenderTarget, D2D1CreateFactory,
             ID2D1Brush, ID2D1SolidColorBrush, D2D1_LAYER_PARAMETERS,
             D2D1_LAYER_OPTIONS_INITIALIZE_FOR_CLEARTYPE,
-            D2D1_BRUSH_PROPERTIES, D2D1_PRESENT_OPTIONS_NONE,
+            D2D1_PRESENT_OPTIONS_NONE,
             D2D1_POINT_2F, D2D1_MATRIX_3X2_F, D2D1_SIZE_U, D2D1_RECT_F,
             D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FEATURE_LEVEL_DEFAULT,
             D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_USAGE_NONE,
@@ -34,7 +34,6 @@ use winapi::{
         unknwnbase::IUnknown
     },
     shared::{
-        d3d9types::D3DCOLORVALUE,
         dxgiformat::DXGI_FORMAT_UNKNOWN,
         windef::{
             RECT, HWND
@@ -46,6 +45,8 @@ use winapi::{
 
 use crate::settings;
 use crate::buffer::TextBuffer;
+use crate::theme::Theme;
+use crate::lsp_structs::SemanticTokenTypes;
 
 #[macro_export]
 #[cfg(debug_assertions)]
@@ -64,21 +65,6 @@ macro_rules! dx_ok {
 }
 
 const IDENTITY_MATRIX: D2D1_MATRIX_3X2_F = D2D1_MATRIX_3X2_F { matrix: [[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]] };
-const BACKGROUND_COLOR: D3DCOLORVALUE = D3DCOLORVALUE {
-    r: 0.13, g: 0.13, b: 0.13, a: 1.0
-};
-const TEXT_COLOR: D3DCOLORVALUE = D3DCOLORVALUE {
-    r: 1.0, g: 0.95, b: 0.80, a: 1.0
-};
-const LINE_NUMBER_COLOR: D3DCOLORVALUE = D3DCOLORVALUE {
-    r: 0.7, g: 0.60, b: 0.50, a: 1.0
-};
-const CARET_COLOR: D3DCOLORVALUE = D3DCOLORVALUE {
-    r: 1.0, g: 1.0, b: 1.0, a: 1.0
-};
-const SELECTION_COLOR: D3DCOLORVALUE = D3DCOLORVALUE {
-    r: 0.45, g: 0.66, b: 0.78, a: 1.0
-};
 
 struct Brushes {
     text: *mut ID2D1SolidColorBrush,
@@ -88,13 +74,13 @@ struct Brushes {
 }
 
 pub struct TextRenderer {
-    brushes: Brushes,
-
     dpi_scale: f32,
     pub pixel_size: D2D1_SIZE_U,
     pub font_size: f32,
     pub font_height: f32,
     pub font_width: f32,
+
+    theme: Theme,
 
     pub write_factory: *mut IDWriteFactory,
     pub text_format: *mut IDWriteTextFormat,
@@ -104,15 +90,8 @@ pub struct TextRenderer {
 }
 
 impl TextRenderer {
-    pub fn new(hwnd: HWND, font: &str, font_size: f32) -> TextRenderer {
+    pub fn new(hwnd: HWND, font: &str, mut font_size: f32) -> TextRenderer {
         let mut renderer = TextRenderer {
-            brushes: Brushes {
-                text: null_mut(),
-                line_number: null_mut(),
-                caret: null_mut(),
-                selection: null_mut()
-            },
-
             dpi_scale: 0.0,
             pixel_size: D2D1_SIZE_U {
                 width: 0,
@@ -121,6 +100,8 @@ impl TextRenderer {
             font_size,
             font_height: 0.0,
             font_width: 0.0,
+
+            theme: Theme::default(),
                 
             write_factory: null_mut(),
             text_format: null_mut(),
@@ -140,6 +121,9 @@ impl TextRenderer {
 
             let dpi = GetDpiForWindow(hwnd);
             renderer.dpi_scale = dpi as f32 / 96.0;
+
+            // Scale the font size to fit the dpi
+            font_size *= renderer.dpi_scale;
 
             let mut rect_uninit = MaybeUninit::<RECT>::uninit();
             GetClientRect(hwnd, rect_uninit.as_mut_ptr());
@@ -169,15 +153,7 @@ impl TextRenderer {
 
             dx_ok!((*renderer.factory).CreateHwndRenderTarget(&target_props, &hwnd_props, &mut renderer.target as *mut *mut _)); 
 
-            let brush_properties = D2D1_BRUSH_PROPERTIES {
-                opacity: 1.0,
-                transform: IDENTITY_MATRIX
-            };
-
-            dx_ok!((*renderer.target).CreateSolidColorBrush(&TEXT_COLOR, &brush_properties, &mut renderer.brushes.text as *mut *mut _));
-            dx_ok!((*renderer.target).CreateSolidColorBrush(&LINE_NUMBER_COLOR, &brush_properties, &mut renderer.brushes.line_number as *mut *mut _));
-            dx_ok!((*renderer.target).CreateSolidColorBrush(&CARET_COLOR, &brush_properties, &mut renderer.brushes.caret as *mut *mut _));
-            dx_ok!((*renderer.target).CreateSolidColorBrush(&SELECTION_COLOR, &brush_properties, &mut renderer.brushes.selection as *mut *mut _));
+            renderer.theme = Theme::new_default(renderer.target);
 
             dx_ok!(
                 DWriteCreateFactory(
@@ -300,7 +276,7 @@ impl TextRenderer {
                     bottom: metrics.top + metrics.height
                 };
 
-                (*self.target).FillRectangle(&highlight_rect, self.brushes.selection as *mut ID2D1Brush);
+                (*self.target).FillRectangle(&highlight_rect, self.theme.selection_brush as *mut ID2D1Brush);
 
             });
             (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
@@ -314,7 +290,7 @@ impl TextRenderer {
             (*self.target).BeginDraw();
 
             (*self.target).SetTransform(&IDENTITY_MATRIX);
-            (*self.target).Clear(&BACKGROUND_COLOR);
+            (*self.target).Clear(&self.theme.background_color);
 
             // Push the line numbers layer params before drawing
             let (line_numbers_layout, line_numbers_layer_params) = text_buffer.get_line_numbers_layout();
@@ -325,7 +301,7 @@ impl TextRenderer {
                     y: text_buffer.line_numbers_origin.1 as f32
                 },
                 line_numbers_layout,
-                self.brushes.line_number as *mut ID2D1Brush,
+                self.theme.line_number_brush as *mut ID2D1Brush,
                 D2D1_DRAW_TEXT_OPTIONS_NONE
             );
             (*self.target).PopLayer();
@@ -333,6 +309,18 @@ impl TextRenderer {
             // Push the text layer params before drawing
             let (text_layout, text_layer_params) = text_buffer.get_text_layout();
             (*self.target).PushLayer(&text_layer_params, null_mut());
+
+            let highlights = text_buffer.get_semantic_highlighting();
+            for (range, token_type) in highlights {
+                match token_type {
+                    SemanticTokenTypes::None     => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.test_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::Variable => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.variable_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::Function => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.function_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::Method   => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.method_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::Class    => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.class_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::Enum     => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.enum_brush as *mut IUnknown, range)); }
+                }
+            }
 
             if let Some(selection_range) = text_buffer.get_selection_range() {
                 self.draw_selection_range(text_buffer.text_origin, text_layout, selection_range);
@@ -344,14 +332,14 @@ impl TextRenderer {
                     y: text_buffer.text_origin.1 as f32
                 },
                 text_layout,
-                self.brushes.text as *mut ID2D1Brush,
+                self.theme.text_brush as *mut ID2D1Brush,
                 D2D1_DRAW_TEXT_OPTIONS_NONE
             );
 
             if draw_caret {
                 if let Some(rect) = text_buffer.get_caret_rect() {
                     (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
-                    (*self.target).FillRectangle(&rect, self.brushes.caret as *mut ID2D1Brush);
+                    (*self.target).FillRectangle(&rect, self.theme.caret_brush as *mut ID2D1Brush);
                     (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
                 }
             }

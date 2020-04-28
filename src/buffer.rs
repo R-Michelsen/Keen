@@ -23,8 +23,14 @@ use winapi::{
 use ropey::Rope;
 
 use crate::dx_ok;
-use crate::settings;
+use crate::settings::{ CPP_LANGUAGE_IDENTIFIER, RUST_LANGUAGE_IDENTIFIER, MOUSEWHEEL_LINES_PER_ROLL, NUMBER_OF_SPACES_PER_TAB };
 use crate::renderer::TextRenderer;
+use crate::lsp_structs::{ 
+    VersionedTextDocumentIdentifier, TextDocumentContentChangeEvent, 
+    Range, Position, DidChangeNotification, 
+    RustSemanticTokenTypes, RustSemanticTokenModifiers,
+    CppSemanticTokenTypes, SemanticTokenTypes
+};
 
 #[derive(PartialEq)]
 pub enum SelectionMode {
@@ -89,11 +95,15 @@ pub struct TextBuffer {
     line_numbers_layer_params: D2D1_LAYER_PARAMETERS,
     line_numbers_layout: *mut IDWriteTextLayout,
 
-    renderer: Rc<RefCell<TextRenderer>>
+    renderer: Rc<RefCell<TextRenderer>>,
+
+    language_identifier: &'static str,
+    lsp_versioned_identifier: VersionedTextDocumentIdentifier,
+    semantic_tokens: Vec<u32>
 }
 
 impl TextBuffer {
-    pub fn new(path: &str, origin: (u32, u32), extents: (u32, u32), renderer: Rc<RefCell<TextRenderer>>) -> TextBuffer {
+    pub fn new(path: &str, language_identifier: &'static str, origin: (u32, u32), extents: (u32, u32), renderer: Rc<RefCell<TextRenderer>>) -> TextBuffer {
         let file = File::open(path).unwrap();
         let buffer = Rope::from_reader(file).unwrap();
 
@@ -137,11 +147,26 @@ impl TextBuffer {
             line_numbers_layer_params: unsafe { MaybeUninit::<D2D1_LAYER_PARAMETERS>::zeroed().assume_init() },
             line_numbers_layout: null_mut(),
 
-            renderer
+            renderer,
+
+            language_identifier,
+            lsp_versioned_identifier: VersionedTextDocumentIdentifier {
+                uri: "file:///".to_owned() + path,
+                version: 0
+            },
+            semantic_tokens: Vec::new()
         };
 
         text_buffer.update_metrics(origin, extents);
         text_buffer
+    }
+
+    pub fn update_semantic_tokens(&mut self, data: Vec<u32>) {
+        self.semantic_tokens = data;
+    }
+
+    pub fn get_uri(&self) -> String {
+        return self.lsp_versioned_identifier.uri.clone();
     }
 
     pub fn get_caret_absolute_pos(&self) -> usize {
@@ -149,7 +174,7 @@ impl TextBuffer {
     }
 
     pub fn scroll_down(&mut self) {
-        let new_top = self.top_line + settings::MOUSEWHEEL_LINES_PER_ROLL;
+        let new_top = self.top_line + MOUSEWHEEL_LINES_PER_ROLL;
         if new_top >= self.buffer.len_lines() {
             self.top_line = self.buffer.len_lines() - 1;
         }
@@ -160,8 +185,8 @@ impl TextBuffer {
     }
 
     pub fn scroll_up(&mut self) {
-        if self.top_line >= settings::MOUSEWHEEL_LINES_PER_ROLL {
-            self.top_line -= settings::MOUSEWHEEL_LINES_PER_ROLL;
+        if self.top_line >= MOUSEWHEEL_LINES_PER_ROLL {
+            self.top_line -= MOUSEWHEEL_LINES_PER_ROLL;
         }
         else {
             self.top_line = 0;
@@ -418,39 +443,112 @@ impl TextBuffer {
         (dx, dy)
     }
 
-    pub fn delete_selection(&mut self) {
+    pub fn delete_selection(&mut self) -> TextDocumentContentChangeEvent {
         let caret_absolute_pos = self.get_caret_absolute_pos();
-        if caret_absolute_pos != self.caret_char_anchor {
-            if caret_absolute_pos < self.caret_char_anchor {
-                self.buffer.remove(caret_absolute_pos..self.caret_char_anchor);
-                self.caret_char_pos = caret_absolute_pos;
-                self.caret_char_anchor = self.caret_char_pos;
-            }
-            else {
-                self.buffer.remove(self.caret_char_anchor..caret_absolute_pos);
-                let caret_anchor_delta = caret_absolute_pos - self.caret_char_anchor;
-                self.caret_char_pos = caret_absolute_pos - caret_anchor_delta;
-            }
-            self.caret_is_trailing = 0;
+        let line = self.buffer.char_to_line(caret_absolute_pos);
+        let character_position_in_line = caret_absolute_pos - self.buffer.line_to_char(line);
+
+        let change_event;
+        if caret_absolute_pos < self.caret_char_anchor {
+            let end_line = self.buffer.char_to_line(self.caret_char_anchor);
+            let character_position_in_end_line = self.caret_char_anchor - self.buffer.line_to_char(end_line);
+            self.buffer.remove(caret_absolute_pos..self.caret_char_anchor);
+
+            self.caret_char_pos = caret_absolute_pos;
+            self.caret_char_anchor = self.caret_char_pos;
+
+            change_event = TextDocumentContentChangeEvent {
+                text: "".to_owned(),
+                range: Range {
+                    start: Position::new(line as i64, character_position_in_line as i64),
+                    end: Position::new(end_line as i64, character_position_in_end_line as i64),
+                }
+            };
         }
+        else {
+            let start_line = self.buffer.char_to_line(self.caret_char_anchor);
+            let character_position_in_start_line = self.caret_char_anchor - self.buffer.line_to_char(start_line);
+            self.buffer.remove(self.caret_char_anchor..caret_absolute_pos);
+
+            let caret_anchor_delta = caret_absolute_pos - self.caret_char_anchor;
+            self.caret_char_pos = caret_absolute_pos - caret_anchor_delta;
+
+            change_event = TextDocumentContentChangeEvent {
+                text: "".to_owned(),
+                range: Range {
+                    start: Position::new(start_line as i64, character_position_in_start_line as i64),
+                    end: Position::new(line as i64, character_position_in_line as i64),
+                }
+            };
+        }
+        self.caret_is_trailing = 0;
+
+        // Return the change event
+        return change_event;
     }
 
-    pub fn insert_chars(&mut self, chars: &str) {
-        self.delete_selection();
+    pub fn insert_chars(&mut self, chars: &str) -> DidChangeNotification {
+        let mut changes = Vec::new();
 
-        self.buffer.insert(self.get_caret_absolute_pos(), chars);
+        let caret_absolute_pos = self.get_caret_absolute_pos();
+        let line = self.buffer.char_to_line(caret_absolute_pos);
+        let character_position_in_line = caret_absolute_pos - self.buffer.line_to_char(line);
+
+        // If we are currently selecting text, 
+        // delete text before insertion
+        if caret_absolute_pos != self.caret_char_anchor {
+            changes.push(self.delete_selection());
+        }
+
+        self.buffer.insert(caret_absolute_pos, chars);
         self.set_selection(SelectionMode::Right, chars.len(), false);
 
         self.update_absolute_char_positions();
+
+        // Update the file version and return the change notification
+        self.lsp_versioned_identifier.version += 1;
+        let change_event = TextDocumentContentChangeEvent {
+            text: chars.to_owned(),
+            range: Range {
+                start: Position::new(line as i64, character_position_in_line as i64),
+                end: Position::new(line as i64, character_position_in_line as i64),
+            }
+        };
+
+        changes.push(change_event);
+        DidChangeNotification::new(self.lsp_versioned_identifier.clone(), changes)
     }
 
-    pub fn insert_char(&mut self, character: u16) {
-        self.delete_selection();
+    pub fn insert_char(&mut self, character: u16) -> DidChangeNotification {
+        let mut changes = Vec::new();
 
-        self.buffer.insert_char(self.get_caret_absolute_pos(), (character as u8) as char);
+        let caret_absolute_pos = self.get_caret_absolute_pos();
+        let line = self.buffer.char_to_line(caret_absolute_pos);
+        let character_position_in_line = caret_absolute_pos - self.buffer.line_to_char(line);
+
+        // If we are currently selecting text, 
+        // delete text before insertion
+        if caret_absolute_pos != self.caret_char_anchor {
+            changes.push(self.delete_selection());
+        }
+
+        self.buffer.insert_char(caret_absolute_pos, (character as u8) as char);
         self.set_selection(SelectionMode::Right, 1, false);
 
         self.update_absolute_char_positions();
+
+        // Update the file version and return the change notification
+        self.lsp_versioned_identifier.version += 1;
+        let change_event = TextDocumentContentChangeEvent {
+            text: ((character as u8) as char).to_string(),
+            range: Range {
+                start: Position::new(line as i64, character_position_in_line as i64),
+                end: Position::new(line as i64, character_position_in_line as i64),
+            }
+        };
+
+        changes.push(change_event);
+        DidChangeNotification::new(self.lsp_versioned_identifier.clone(), changes)
     }
 
     fn see_chars(&mut self, string: &str) -> bool {
@@ -475,14 +573,16 @@ impl TextBuffer {
         true
     }
 
-    pub fn delete_right(&mut self) {
+    pub fn delete_right(&mut self) -> DidChangeNotification {
         let caret_absolute_pos = self.get_caret_absolute_pos();
+        let line = self.buffer.char_to_line(caret_absolute_pos);
+        let character_position_in_line = caret_absolute_pos - self.buffer.line_to_char(line);
 
         // If we are currently selecting text, 
         // simply delete the selected text
         if caret_absolute_pos != self.caret_char_anchor {
-            self.delete_selection();
-            return;
+            self.lsp_versioned_identifier.version += 1;
+            return DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![self.delete_selection()]);
         }
 
         // In case of a CRLF, delete both characters
@@ -490,35 +590,58 @@ impl TextBuffer {
         if self.see_chars("\r\n") {
             offset = 2;
         }
+        // In case of a <TAB>, delete the corresponding
+        // number of spaces
+        else if self.see_chars(" ".repeat(NUMBER_OF_SPACES_PER_TAB).as_str()) {
+            offset = NUMBER_OF_SPACES_PER_TAB;
+        }
 
         let next_char_pos = min(caret_absolute_pos + offset, self.buffer.len_chars());
         self.buffer.remove(caret_absolute_pos..next_char_pos);
         self.update_absolute_char_positions();
+
+        let new_line = self.buffer.char_to_line(next_char_pos);
+        let new_character_position_in_line = next_char_pos - self.buffer.line_to_char(new_line);
+
+        // Update the file version and return the change event
+        self.lsp_versioned_identifier.version += 1;
+        let change_event = TextDocumentContentChangeEvent {
+            text: "".to_owned(),
+            range: Range {
+                start: Position::new(line as i64, character_position_in_line as i64),
+                end: Position::new(new_line as i64, new_character_position_in_line as i64),
+            }
+        };
+        DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![change_event])
     }
 
-    pub fn delete_right_by_word(&mut self) {
+    pub fn delete_right_by_word(&mut self) -> DidChangeNotification {
         let caret_absolute_pos = self.get_caret_absolute_pos();
 
         // If we are currently selecting text, 
         // simply delete the selected text
         if caret_absolute_pos != self.caret_char_anchor {
-            self.delete_selection();
-            return;
+            self.lsp_versioned_identifier.version += 1;
+            return DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![self.delete_selection()]);
         }
 
         let count = self.get_boundary_char_count(CharSearchDirection::Forward);
         self.set_selection(SelectionMode::Right, count, true);
-        self.delete_selection();
+
+        self.lsp_versioned_identifier.version += 1;
+        return DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![self.delete_selection()]);
     }
 
-    pub fn delete_left(&mut self) {
+    pub fn delete_left(&mut self) -> DidChangeNotification {
         let caret_absolute_pos = self.get_caret_absolute_pos();
+        let line = self.buffer.char_to_line(caret_absolute_pos);
+        let character_position_in_line = caret_absolute_pos - self.buffer.line_to_char(line);
 
         // If we are currently selecting text, 
         // simply delete the selected text
         if caret_absolute_pos != self.caret_char_anchor {
-            self.delete_selection();
-            return;
+            self.lsp_versioned_identifier.version += 1;
+            return DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![self.delete_selection()]);
         }
 
         // In case of a CRLF, delete both characters
@@ -526,26 +649,111 @@ impl TextBuffer {
         if self.see_prev_chars("\r\n") {
             offset = 2;
         }
+        // In case of a <TAB>, delete the corresponding
+        // number of spaces
+        else if self.see_prev_chars(" ".repeat(NUMBER_OF_SPACES_PER_TAB).as_str()) {
+            offset = NUMBER_OF_SPACES_PER_TAB;
+        }
 
         let previous_char_pos = caret_absolute_pos.saturating_sub(offset);
         self.buffer.remove(previous_char_pos..caret_absolute_pos);
         self.set_selection(SelectionMode::Left, offset, false);
         self.update_absolute_char_positions();
+
+        let new_line = self.buffer.char_to_line(previous_char_pos);
+        let new_character_position_in_line = previous_char_pos - self.buffer.line_to_char(new_line);
+
+        // Update the file version and return the change event
+        self.lsp_versioned_identifier.version += 1;
+        let change_event = TextDocumentContentChangeEvent {
+            text: "".to_owned(),
+            range: Range {
+                start: Position::new(new_line as i64, new_character_position_in_line as i64),
+                end: Position::new(line as i64, character_position_in_line as i64),
+            }
+        };
+        DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![change_event])
     }
 
-    pub fn delete_left_by_word(&mut self) {
+    pub fn delete_left_by_word(&mut self) -> DidChangeNotification {
         let caret_absolute_pos = self.get_caret_absolute_pos();
 
         // If we are currently selecting text, 
         // simply delete the selected text
         if caret_absolute_pos != self.caret_char_anchor {
-            self.delete_selection();
-            return;
+            self.lsp_versioned_identifier.version += 1;
+            return DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![self.delete_selection()]);
         }
 
         let count = self.get_boundary_char_count(CharSearchDirection::Backward);
         self.set_selection(SelectionMode::Left, count, true);
-        self.delete_selection();
+
+        self.lsp_versioned_identifier.version += 1;
+        return DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![self.delete_selection()]);
+    }
+
+    pub fn get_semantic_highlighting(&mut self) -> Vec<(DWRITE_TEXT_RANGE, SemanticTokenTypes)> {
+        let top_line_absolute_pos = self.buffer.line_to_char(self.top_line);
+        let mut highlights = Vec::new();
+
+        // This is only safe because the semantic token data
+        // always comes in multiples of 5
+        let mut i = 0;
+        let mut line = 0;
+        let mut start = 0;
+
+        while i < self.semantic_tokens.len() {
+            let delta_line      = self.semantic_tokens[i];
+            line += delta_line;
+
+            // Early continue if line is above the current view
+            // Early break if line is below the current view
+            if line < self.top_line as u32 {
+                i += 5;
+                continue;
+            }
+            else if line > self.bot_line as u32 {
+                break;
+            }
+
+            let delta_start     = self.semantic_tokens[i + 1];
+            if delta_line == 0 {
+                start += delta_start;
+            }
+            else {
+                start = delta_start;
+            }
+            let length          = self.semantic_tokens[i + 2];
+
+            match self.language_identifier {
+                CPP_LANGUAGE_IDENTIFIER => {
+                    let token_type = CppSemanticTokenTypes::to_semantic_token_type(CppSemanticTokenTypes::from_u32(self.semantic_tokens[i + 3]));
+                    let line_absolute_pos = self.buffer.line_to_char(line as usize);
+                    let range = DWRITE_TEXT_RANGE {
+                        startPosition: ((line_absolute_pos + start as usize) - top_line_absolute_pos) as u32,
+                        length
+                    };
+                    highlights.push((range, token_type));
+                },
+                RUST_LANGUAGE_IDENTIFIER => {
+                    let token_type = RustSemanticTokenTypes::to_semantic_token_type(RustSemanticTokenTypes::from_u32(self.semantic_tokens[i + 3]));
+                    let line_absolute_pos = self.buffer.line_to_char(line as usize);
+                    let range = DWRITE_TEXT_RANGE {
+                        startPosition: ((line_absolute_pos + start as usize) - top_line_absolute_pos) as u32,
+                        length
+                    };
+                    highlights.push((range, token_type));
+
+                    // We don't currently use the modifiers for highlighting
+                    let _  = RustSemanticTokenModifiers::from_u32(self.semantic_tokens[i + 4]);
+                },
+                _ => return Vec::new()
+            }
+
+            i += 5;
+        }
+
+        highlights
     }
 
     pub fn get_caret_rect(&mut self) -> Option<D2D1_RECT_F> {
