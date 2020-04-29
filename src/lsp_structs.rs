@@ -115,6 +115,7 @@ pub enum TextDocumentSymbolKinds {
     Incremental = 2
 }
 
+#[derive(Debug)]
 pub enum SemanticTokenTypes {
     None,
     Variable,

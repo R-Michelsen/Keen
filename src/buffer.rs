@@ -53,6 +53,11 @@ pub enum CharSearchDirection {
     Backward
 }
 
+struct TemporaryEdit {
+    pub added: bool,
+    pub line_num: usize
+}
+
 pub struct TextBuffer {
     buffer: Rope,
 
@@ -97,7 +102,8 @@ pub struct TextBuffer {
     renderer: Rc<RefCell<TextRenderer>>,
 
     lsp_versioned_identifier: VersionedTextDocumentIdentifier,
-    semantic_tokens: Vec<u32>
+    semantic_tokens: Vec<u32>,
+    semantic_tokens_edits: Vec<TemporaryEdit>
 }
 
 impl TextBuffer {
@@ -153,7 +159,8 @@ impl TextBuffer {
                 uri: "file:///".to_owned() + path,
                 version: 0
             },
-            semantic_tokens: Vec::new()
+            semantic_tokens: Vec::new(),
+            semantic_tokens_edits: Vec::new()
         };
 
         text_buffer.update_metrics(origin, extents);
@@ -172,6 +179,7 @@ impl TextBuffer {
 
     pub fn update_semantic_tokens(&mut self, data: Vec<u32>) {
         self.semantic_tokens = data;
+        self.semantic_tokens_edits.clear();
     }
 
     pub fn get_uri(&self) -> String {
@@ -511,6 +519,16 @@ impl TextBuffer {
         let line = self.buffer.char_to_line(caret_absolute_pos);
         let character_position_in_line = caret_absolute_pos - self.buffer.line_to_char(line);
 
+        // Add the newline to the temporary edits to preserve
+        // semantic highlighting until new highlights are resolved
+        // by the language server
+        if chars == "\r\n" {
+            self.semantic_tokens_edits.push(TemporaryEdit {
+                added: true,
+                line_num: line + 1
+            })
+        }
+
         // If we are currently selecting text, 
         // delete text before insertion
         if caret_absolute_pos != self.caret_char_anchor {
@@ -521,7 +539,7 @@ impl TextBuffer {
         self.set_selection(SelectionMode::Right, chars.len(), false);
 
         self.update_absolute_char_positions();
-
+        
         // Update the file version and return the change notification
         self.lsp_versioned_identifier.version += 1;
         let change_event = TextDocumentContentChangeEvent {
@@ -594,6 +612,7 @@ impl TextBuffer {
         let caret_absolute_pos = self.get_caret_absolute_pos();
         let line = self.buffer.char_to_line(caret_absolute_pos);
         let character_position_in_line = caret_absolute_pos - self.buffer.line_to_char(line);
+        let len_lines = self.buffer.len_lines();
 
         // If we are currently selecting text, 
         // simply delete the selected text
@@ -607,6 +626,7 @@ impl TextBuffer {
         if self.see_chars("\r\n") {
             offset = 2;
         }
+
         // In case of a <TAB>, delete the corresponding
         // number of spaces
         else if self.see_chars(" ".repeat(NUMBER_OF_SPACES_PER_TAB).as_str()) {
@@ -619,6 +639,16 @@ impl TextBuffer {
 
         let new_line = self.buffer.char_to_line(next_char_pos);
         let new_character_position_in_line = next_char_pos - self.buffer.line_to_char(new_line);
+
+        // In case the line has changed,
+        // insert temporary edit to preserve semantic highlights
+        // until the LSP server resolves the edit
+        if len_lines > self.buffer.len_lines() {
+            self.semantic_tokens_edits.push(TemporaryEdit {
+                added: false,
+                line_num: line
+            })
+        }
 
         // Update the file version and return the change event
         self.lsp_versioned_identifier.version += 1;
@@ -653,6 +683,7 @@ impl TextBuffer {
         let caret_absolute_pos = self.get_caret_absolute_pos();
         let line = self.buffer.char_to_line(caret_absolute_pos);
         let character_position_in_line = caret_absolute_pos - self.buffer.line_to_char(line);
+        let len_lines = self.buffer.len_lines();
 
         // If we are currently selecting text, 
         // simply delete the selected text
@@ -662,6 +693,7 @@ impl TextBuffer {
         }
 
         // In case of a CRLF, delete both characters
+        // Also insert a temporary edit
         let mut offset = 1;
         if self.see_prev_chars("\r\n") {
             offset = 2;
@@ -679,6 +711,16 @@ impl TextBuffer {
 
         let new_line = self.buffer.char_to_line(previous_char_pos);
         let new_character_position_in_line = previous_char_pos - self.buffer.line_to_char(new_line);
+
+        // In case the line has changed,
+        // insert temporary edit to preserve semantic highlights
+        // until the LSP server resolves the edit
+        if len_lines > self.buffer.len_lines() {
+            self.semantic_tokens_edits.push(TemporaryEdit {
+                added: false,
+                line_num: line
+            })
+        }
 
         // Update the file version and return the change event
         self.lsp_versioned_identifier.version += 1;
@@ -868,10 +910,20 @@ impl TextBuffer {
             }
             let length = self.semantic_tokens[i + 2];
 
+            let mut line_offset: i32 = 0;
+            for edit in &self.semantic_tokens_edits {
+                if edit.added && line as usize >= edit.line_num {
+                    line_offset += 1;
+                }
+                else if !edit.added && line as usize >= edit.line_num {
+                    line_offset -= 1;
+                }
+            }
+
             match self.language_identifier {
                 CPP_LANGUAGE_IDENTIFIER => {
                     let token_type = CppSemanticTokenTypes::to_semantic_token_type(CppSemanticTokenTypes::from_u32(self.semantic_tokens[i + 3]));
-                    let line_absolute_pos = self.buffer.line_to_char(line as usize);
+                    let line_absolute_pos = self.buffer.line_to_char((line as i32 + line_offset) as usize);
                     let range = DWRITE_TEXT_RANGE {
                         startPosition: ((line_absolute_pos + start as usize) - top_line_absolute_pos) as u32,
                         length
@@ -880,7 +932,7 @@ impl TextBuffer {
                 },
                 RUST_LANGUAGE_IDENTIFIER => {
                     let token_type = RustSemanticTokenTypes::to_semantic_token_type(RustSemanticTokenTypes::from_u32(self.semantic_tokens[i + 3]));
-                    let line_absolute_pos = self.buffer.line_to_char(line as usize);
+                    let line_absolute_pos = self.buffer.line_to_char((line as i32 + line_offset) as usize);
                     let range = DWRITE_TEXT_RANGE {
                         startPosition: ((line_absolute_pos + start as usize) - top_line_absolute_pos) as u32,
                         length

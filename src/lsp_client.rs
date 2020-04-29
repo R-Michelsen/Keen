@@ -32,7 +32,6 @@ impl LSPClient {
     pub fn new(hwnd: HWND, client_name: &'static str) -> LSPClient {
         // Spawn an instance of the language server
         let mut lsp = Command::new(client_name)
-            // .arg("--log=verbose")
             .stdin(Stdio::piped())
             .stderr(Stdio::piped())
             .stdout(Stdio::piped())
