@@ -80,8 +80,8 @@ impl Editor {
             TextBuffer::new(
                 path,
                 language_identifier,
-                (0, 0), 
-                (self.renderer.borrow().pixel_size.width, self.renderer.borrow().pixel_size.height), 
+                (0.0, 0.0), 
+                (self.renderer.borrow().pixel_size.width as f32, self.renderer.borrow().pixel_size.height as f32), 
                 self.renderer.clone()
             )
         );
@@ -119,7 +119,7 @@ impl Editor {
     pub fn resize(&mut self, width: u32, height: u32) {
         self.renderer.borrow_mut().resize(width, height);
         for (_, buffer) in self.buffers.iter_mut() {
-            buffer.update_metrics((0, 0), (self.renderer.borrow().pixel_size.width, self.renderer.borrow().pixel_size.height));
+            buffer.update_metrics((0.0, 0.0), (self.renderer.borrow().pixel_size.width as f32, self.renderer.borrow().pixel_size.height as f32));
         }
     }
 
@@ -226,10 +226,10 @@ impl Editor {
                 EditorCommand::CaretVisible => self.caret_is_visible = true,
                 EditorCommand::CaretInvisible => self.caret_is_visible = false,
                 EditorCommand::ScrollUp => {
-                    buffer.scroll_up(MOUSEWHEEL_LINES_PER_ROLL);
+                    buffer.scroll_up(SCROLL_LINES_PER_ROLL);
                 },
                 EditorCommand::ScrollDown => { 
-                    buffer.scroll_down(MOUSEWHEEL_LINES_PER_ROLL);
+                    buffer.scroll_down(SCROLL_LINES_PER_ROLL);
                 },
                 EditorCommand::LeftClick(mouse_pos, shift_down) => {
                     buffer.left_click(mouse_pos, shift_down);
@@ -241,6 +241,19 @@ impl Editor {
                 }
                 EditorCommand::LeftRelease => buffer.left_release(),
                 EditorCommand::MouseMove(mouse_pos) => {
+                    if mouse_pos.1 > (buffer.origin.1 + buffer.extents.1) {
+                        buffer.scroll_down(SCROLL_LINES_PER_MOUSEMOVE);
+                    }
+                    else if mouse_pos.1 < buffer.origin.1 {
+                        buffer.scroll_up(SCROLL_LINES_PER_MOUSEMOVE);
+                    }
+                    if mouse_pos.0 > (buffer.origin.0 + buffer.extents.0) {
+                        buffer.scroll_right(SCROLL_LINES_PER_MOUSEMOVE);
+                    }
+                    else if mouse_pos.0 < buffer.origin.0 {
+                        buffer.scroll_left(SCROLL_LINES_PER_MOUSEMOVE);
+                    }
+
                     buffer.set_mouse_selection(MouseSelectionMode::Move, mouse_pos);
                 },
                 EditorCommand::KeyPressed(key, shift_down, ctrl_down) => { 

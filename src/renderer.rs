@@ -180,13 +180,13 @@ impl TextRenderer {
         renderer
     }
 
-    pub fn layer_params(origin: (u32, u32), size: (u32, u32)) -> D2D1_LAYER_PARAMETERS {
+    pub fn layer_params(origin: (f32, f32), size: (f32, f32)) -> D2D1_LAYER_PARAMETERS {
         D2D1_LAYER_PARAMETERS {
             contentBounds: D2D1_RECT_F {
-                left: origin.0 as f32,
-                right: origin.0 as f32 + size.0 as f32,
-                top: origin.1 as f32,
-                bottom: origin.1 as f32 + size.1 as f32
+                left: origin.0,
+                right: origin.0 + size.0,
+                top: origin.1,
+                bottom: origin.1 + size.1
             },
             geometricMask: null_mut(),
             maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
@@ -229,15 +229,15 @@ impl TextRenderer {
         }
     }
 
-    fn draw_selection_range(&self, origin: (u32, u32), text_layout: *mut IDWriteTextLayout, range: DWRITE_TEXT_RANGE) {
+    fn draw_selection_range(&self, origin: (f32, f32), text_layout: *mut IDWriteTextLayout, range: DWRITE_TEXT_RANGE) {
         let mut hit_test_count = 0;
 
         unsafe {
             let hr: i32 = (*text_layout).HitTestTextRange(
                         range.startPosition, 
                         range.length,
-                        origin.0 as f32,
-                        origin.1 as f32,
+                        origin.0,
+                        origin.1,
                         null_mut(),
                         0,
                         &mut hit_test_count
@@ -251,8 +251,8 @@ impl TextRenderer {
                 (*text_layout).HitTestTextRange(
                     range.startPosition,
                     range.length,
-                    origin.0 as f32,
-                    origin.1 as f32,
+                    origin.0,
+                    origin.1,
                     hit_tests.as_mut_ptr(),
                     hit_tests.len() as u32,
                     &mut hit_test_count
@@ -290,8 +290,8 @@ impl TextRenderer {
             (*self.target).PushLayer(&line_numbers_layer_params, null_mut());
             (*self.target).DrawTextLayout(
                 D2D1_POINT_2F { 
-                    x: text_buffer.line_numbers_origin.0 as f32,
-                    y: text_buffer.line_numbers_origin.1 as f32
+                    x: text_buffer.line_numbers_origin.0,
+                    y: text_buffer.line_numbers_origin.1
                 },
                 line_numbers_layout,
                 self.theme.line_number_brush as *mut ID2D1Brush,
@@ -336,14 +336,16 @@ impl TextRenderer {
                 }
             }
 
+            let view_origin = text_buffer.get_view_origin();
+
             if let Some(selection_range) = text_buffer.get_selection_range() {
-                self.draw_selection_range(text_buffer.text_origin, text_layout, selection_range);
+                self.draw_selection_range(view_origin, text_layout, selection_range);
             }
 
             (*self.target).DrawTextLayout(
                 D2D1_POINT_2F { 
-                    x: text_buffer.text_origin.0 as f32,
-                    y: text_buffer.text_origin.1 as f32
+                    x: view_origin.0,
+                    y: view_origin.1
                 },
                 text_layout,
                 self.theme.text_brush as *mut ID2D1Brush,

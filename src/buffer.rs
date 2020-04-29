@@ -63,14 +63,15 @@ pub struct TextBuffer {
 
     // The layout of the text buffer should be public for
     // the renderer to use
-    pub origin: (u32, u32),
-    pub extents: (u32, u32),
-    pub text_origin: (u32, u32),
-    pub text_extents: (u32, u32),
+    pub origin: (f32, f32),
+    pub extents: (f32, f32),
+    pub text_origin: (f32, f32),
+    pub text_extents: (f32, f32),
     pub text_visible_line_count: usize,
-    pub line_numbers_origin: (u32, u32),
-    pub line_numbers_extents: (u32, u32),
-    pub line_numbers_margin: u32,
+    pub text_column_offset: usize,
+    pub line_numbers_origin: (f32, f32),
+    pub line_numbers_extents: (f32, f32),
+    pub line_numbers_margin: f32,
 
     // The selection state of the buffer should be public
     // for the editor to use
@@ -107,7 +108,7 @@ pub struct TextBuffer {
 }
 
 impl TextBuffer {
-    pub fn new(path: &str, language_identifier: &'static str, origin: (u32, u32), extents: (u32, u32), renderer: Rc<RefCell<TextRenderer>>) -> TextBuffer {
+    pub fn new(path: &str, language_identifier: &'static str, origin: (f32, f32), extents: (f32, f32), renderer: Rc<RefCell<TextRenderer>>) -> TextBuffer {
         let file = File::open(path).unwrap();
         let buffer = Rope::from_reader(file).unwrap();
 
@@ -123,12 +124,13 @@ impl TextBuffer {
 
             origin,
             extents,
-            text_origin: (0, 0),
-            text_extents: (0, 0),
+            text_origin: (0.0, 0.0),
+            text_extents: (0.0, 0.0),
             text_visible_line_count: 0,
-            line_numbers_origin: (0, 0),
-            line_numbers_extents: (0, 0),
-            line_numbers_margin: 0,
+            text_column_offset: 0,
+            line_numbers_origin: (0.0, 0.0),
+            line_numbers_extents: (0.0, 0.0),
+            line_numbers_margin: 0.0,
 
             currently_selecting: false,
 
@@ -209,7 +211,30 @@ impl TextBuffer {
             self.top_line = 0;
         }
         self.update_absolute_char_positions();
-    } 
+    }
+
+    pub fn scroll_left(&mut self, lines_per_roll: usize) {
+        if self.text_column_offset >= lines_per_roll {
+            self.text_column_offset -= lines_per_roll;
+        }
+        else {
+            self.text_column_offset = 0;
+        }
+    }
+
+    pub fn scroll_right(&mut self, lines_per_roll: usize) {
+        let max_columns_in_text_region = (self.text_extents.0 / self.renderer.borrow().font_width) as usize;
+        let current_line = self.buffer.char_to_line(self.get_caret_absolute_pos());
+        let line_length = self.buffer.line(current_line).len_chars();
+        let new_offset = self.text_column_offset + lines_per_roll;
+        if line_length > max_columns_in_text_region && new_offset > (line_length - max_columns_in_text_region) {
+            self.text_column_offset = line_length - max_columns_in_text_region;
+        }
+        else if line_length > max_columns_in_text_region{
+            self.text_column_offset = new_offset;
+        }
+    }
+
 
     fn is_linebreak(&self, chr: char) -> bool {
         return chr == '\n'
@@ -427,6 +452,7 @@ impl TextBuffer {
             self.caret_char_anchor = self.get_caret_absolute_pos();
         }
 
+        self.update_text_column_offset();
     }
 
     pub fn set_mouse_selection(&mut self, mode: MouseSelectionMode, mouse_pos: (f32, f32)) {
@@ -462,8 +488,10 @@ impl TextBuffer {
     }
 
     fn translate_mouse_pos_to_text_region(&self, mouse_pos: (f32, f32)) -> (f32, f32) {
-        let dx = mouse_pos.0 - self.text_origin.0 as f32;
-        let dy = mouse_pos.1 - self.text_origin.1 as f32;
+        let view_origin = self.get_view_origin();
+
+        let dx = mouse_pos.0 - view_origin.0;
+        let dy = mouse_pos.1 - view_origin.1;
         (dx, dy)
     }
 
@@ -539,6 +567,7 @@ impl TextBuffer {
         self.set_selection(SelectionMode::Right, chars.len(), false);
 
         self.update_absolute_char_positions();
+        self.update_text_column_offset();
         
         // Update the file version and return the change notification
         self.lsp_versioned_identifier.version += 1;
@@ -571,6 +600,7 @@ impl TextBuffer {
         self.set_selection(SelectionMode::Right, 1, false);
 
         self.update_absolute_char_positions();
+        self.update_text_column_offset();
 
         // Update the file version and return the change notification
         self.lsp_versioned_identifier.version += 1;
@@ -951,6 +981,13 @@ impl TextBuffer {
         highlights
     }
 
+    pub fn get_view_origin(&self) -> (f32, f32) {
+        return (
+            self.text_origin.0 - self.text_column_offset as f32 * self.renderer.borrow().font_width,
+            self.text_origin.1
+        );
+    }
+
     pub fn get_caret_rect(&mut self) -> Option<D2D1_RECT_F> {
         if self.caret_char_pos < self.absolute_char_pos_start {
             return None;
@@ -970,11 +1007,12 @@ impl TextBuffer {
 
             let metrics = metrics_uninit.assume_init();
 
+            let column_offset = self.text_column_offset as f32 * self.renderer.borrow().font_width;
             let rect = D2D1_RECT_F {
-                left: self.text_origin.0 as f32 + caret_pos.0 - self.half_caret_width as f32,
-                top: self.text_origin.1 as f32 + caret_pos.1,
-                right: self.text_origin.0 as f32 + caret_pos.0 + (self.caret_width - self.half_caret_width) as f32,
-                bottom: self.text_origin.1 as f32 + caret_pos.1 + metrics.height
+                left: self.text_origin.0 - column_offset + caret_pos.0 - self.half_caret_width as f32,
+                top: self.text_origin.1 + caret_pos.1,
+                right: self.text_origin.0 - column_offset + caret_pos.0 + (self.caret_width - self.half_caret_width) as f32,
+                bottom: self.text_origin.1 + caret_pos.1 + metrics.height
             };
 
             return Some(rect)
@@ -1018,8 +1056,8 @@ impl TextBuffer {
                 lines.as_ptr(),
                 lines.len() as u32,
                 self.renderer.borrow().text_format,
-                self.text_extents.0 as f32,
-                self.text_extents.1 as f32,
+                self.text_extents.0,
+                self.text_extents.1,
                 &mut self.text_layout as *mut *mut _
             ));
         }
@@ -1046,8 +1084,8 @@ impl TextBuffer {
                 lines.as_ptr(),
                 lines.len() as u32,
                 self.renderer.borrow().text_format,
-                self.line_numbers_extents.0 as f32,
-                self.line_numbers_extents.1 as f32,
+                self.line_numbers_extents.0,
+                self.line_numbers_extents.1,
                 &mut self.line_numbers_layout as *mut *mut _
             ));
         }
@@ -1055,7 +1093,7 @@ impl TextBuffer {
         (self.line_numbers_layout, self.line_numbers_layer_params)
     }
 
-    pub fn update_metrics(&mut self, origin: (u32, u32), extents: (u32, u32)) {
+    pub fn update_metrics(&mut self, origin: (f32, f32), extents: (f32, f32)) {
         self.origin = origin;
         self.extents = extents;
 
@@ -1063,13 +1101,14 @@ impl TextBuffer {
         self.update_text_region();
         self.update_numbers_region();
         self.update_text_visible_line_count();
+        self.update_text_column_offset();
         self.update_absolute_char_positions();
     }
 
     fn update_line_numbers_margin(&mut self) {
         let end_line_max_digits = self.get_digits_in_number(self.buffer.len_lines() as u32);
         let font_width = self.renderer.borrow().font_width;
-        self.line_numbers_margin = (end_line_max_digits * font_width as u32) + (font_width / 2.0) as u32;
+        self.line_numbers_margin = (end_line_max_digits as f32 * font_width) + (font_width / 2.0);
     }
 
     fn update_text_region(&mut self) {
@@ -1097,8 +1136,24 @@ impl TextBuffer {
     }
 
     fn update_text_visible_line_count(&mut self) {
-        let max_lines_in_text_region = self.extents.1 as usize / self.renderer.borrow().font_height as usize;
+        // Here we explicitly do the line calculation properly
+        // then floor it, if we want to display "half" lines at the bottom
+        // simply floor the font_height before dividing instead
+        let max_lines_in_text_region = (self.text_extents.1 / self.renderer.borrow().font_height) as usize;
         self.text_visible_line_count = min(self.buffer.len_lines(), max_lines_in_text_region);
+    }
+
+    fn update_text_column_offset(&mut self) {
+        let max_columns_in_text_region = (self.text_extents.0 / self.renderer.borrow().font_width) as usize;
+        let caret_absolute_pos = self.get_caret_absolute_pos();
+        let current_line_pos = self.buffer.line_to_char(self.buffer.char_to_line(caret_absolute_pos));
+        let current_column = caret_absolute_pos - current_line_pos;
+        if current_column > max_columns_in_text_region && self.text_column_offset < (current_column - max_columns_in_text_region) {
+            self.text_column_offset = current_column - max_columns_in_text_region;
+        }
+        else if self.text_column_offset > current_column {
+            self.text_column_offset = current_column;
+        }
     }
 
     fn update_absolute_char_positions(&mut self) {
