@@ -487,6 +487,13 @@ impl TextBuffer {
         }
     }
 
+    pub fn select_all(&mut self) {
+        self.caret_char_anchor = 0;
+        self.caret_is_trailing = 0;
+        self.caret_char_pos = self.buffer.len_chars();
+        self.update_text_column_offset();
+    }
+
     fn translate_mouse_pos_to_text_region(&self, mouse_pos: (f32, f32)) -> (f32, f32) {
         let view_origin = self.get_view_origin();
 
@@ -1170,12 +1177,12 @@ impl TextBuffer {
             self.absolute_char_pos_end = self.buffer.line_to_char(self.buffer.len_lines());
         }
         else {
-            self.absolute_char_pos_end = self.buffer.line_to_char(self.bot_line);
+            self.absolute_char_pos_end = self.buffer.line_to_char(self.bot_line) + self.buffer.line(self.bot_line).len_chars();
         }
     }
 
     pub fn get_current_lines(&self) -> Vec<u16> {
-        self.text_range(self.absolute_char_pos_start..self.absolute_char_pos_end)
+        self.text_range(self.absolute_char_pos_start..=self.absolute_char_pos_end)
     }
 
     fn text_range<R>(&self, char_range: R) -> Vec<u16> where R: RangeBounds<usize> {

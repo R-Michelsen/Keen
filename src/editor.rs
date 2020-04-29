@@ -140,63 +140,92 @@ impl Editor {
         }
     }
 
-    pub fn get_response_id(&self, response: &str) -> i64 {
-        let generic_response: GenericResponse = serde_json::from_str(&response).unwrap();
-
-        match generic_response.id {
-            serde_json::Value::Number(x) => x.as_i64().unwrap(),
-            serde_json::Value::String(x) => x.parse::<i64>().unwrap(),
-            _ => {
-                println!("Unrecognized response ID from language server");
-                -1
+    fn handle_response_error(&mut self, request_type: LSPRequestType, response_error: ResponseError) {
+        match request_type {
+            LSPRequestType::InitializationRequest(_) => {},
+            LSPRequestType::SemanticTokenRequest(uri) => {
+                // If the semantic token request fails
+                // due to content changed, send a new one
+                if ErrorCodes::from_i64(response_error.code) == ErrorCodes::ContentModified {
+                    if let Some(lsp_client) = self.lsp_client.as_mut() {
+                        lsp_client.send_semantic_token_request(uri);
+                    }
+                }
             }
         }
     }
 
-    pub fn process_language_server_response(&mut self, response: &str) {
-        // Don't handle requests from server
-        if response.contains("method") {
-            return;
-        }
-
-        let response_id = self.get_response_id(response);
-        let lsp_client = self.lsp_client.as_mut().unwrap();
-        let request_type = lsp_client.request_types[response_id as usize].clone();
-
-        match request_type {
-            LSPRequestType::InitializationRequest(path) => {
-                // Send init notification
-                lsp_client.send_initialized_notification();
-
-                // Then open the file that triggered the LSP creation
-                let file_prefix = "file:///".to_owned();
-                let os_path = Path::new(path.as_str());
-                let extension = os_path.extension().unwrap().to_str().unwrap();
-        
-                let language_identifier = 
-                if CPP_FILE_EXTENSIONS.contains(&extension) {
-                    CPP_LANGUAGE_IDENTIFIER
-                }
-                else if RUST_FILE_EXTENSIONS.contains(&extension) {
-                    RUST_LANGUAGE_IDENTIFIER
-                }
-                else {
-                    ""
-                };
-                let text = std::fs::read_to_string(os_path).unwrap();
-                lsp_client.send_open_file_notification(file_prefix.clone() + path.as_str(), language_identifier.to_owned(), text);
-                lsp_client.send_semantic_token_request(file_prefix + path.as_str());
-            },
-            LSPRequestType::SemanticTokenRequest(uri) => {
-                // Get the buffer for which the semantic token request was issued
-                let buffer = self.buffers.get_mut(&uri).unwrap();
-                let semantic_tokens: SemanticTokenResponse = serde_json::from_str(response).unwrap();
-
-                // Update the semantic tokens of the buffer if they are updated
-                if let Some(result) = semantic_tokens.result {
-                    buffer.update_semantic_tokens(result.data);
+    fn handle_response_success(&mut self, request_type: LSPRequestType, result_value: serde_json::Value) {
+        if let Some(lsp_client) = self.lsp_client.as_mut() {
+            match request_type {
+                LSPRequestType::InitializationRequest(path) => {
+                    // Send init notification
+                    lsp_client.send_initialized_notification();
+    
+                    // Then open the file that triggered the LSP creation
+                    let file_prefix = "file:///".to_owned();
+                    let os_path = Path::new(path.as_str());
+                    let extension = os_path.extension().unwrap().to_str().unwrap();
+            
+                    let language_identifier = 
+                    if CPP_FILE_EXTENSIONS.contains(&extension) {
+                        CPP_LANGUAGE_IDENTIFIER
+                    }
+                    else if RUST_FILE_EXTENSIONS.contains(&extension) {
+                        RUST_LANGUAGE_IDENTIFIER
+                    }
+                    else {
+                        ""
+                    };
+                    let text = std::fs::read_to_string(os_path).unwrap();
+                    lsp_client.send_open_file_notification(file_prefix.clone() + path.as_str(), language_identifier.to_owned(), text);
+                    lsp_client.send_semantic_token_request(file_prefix + path.as_str());
+                },
+                LSPRequestType::SemanticTokenRequest(uri) => {
+                    // Get the buffer for which the semantic token request was issued
+                    let buffer = self.buffers.get_mut(&uri).unwrap();
+    
+                    // Update the semantic tokens of the buffer if they are updated
+                    if let Ok(result) = serde_json::from_value::<SemanticTokenResult>(result_value) {
+                        buffer.update_semantic_tokens(result.data);
+                    }
                 }
             }
+        }
+    }
+
+    pub fn process_language_server_response(&mut self, message: &str) {
+        if let Ok(response) = serde_json::from_str::<GenericResponse>(message) {
+            let response_id = match response.id {
+                serde_json::Value::Number(x) => x.as_i64().unwrap(),
+                serde_json::Value::String(x) => x.parse::<i64>().unwrap(),
+                _ => {
+                    println!("Unrecognized response ID from language server");
+                    -1
+                }
+            };
+
+            if let Some(lsp_client) = self.lsp_client.as_mut() {
+                let request_type = lsp_client.request_types[response_id as usize].clone();
+
+                // Handle any errors
+                if let Some(response_error) = response.error {
+                    self.handle_response_error(request_type, response_error)
+                }
+                // Spec says result is guaranteed to be Some(), when there is no error
+                // rust-analyzer doesn't seem to honor this so we have to check it
+                else {
+                    if let Some(response_result) = response.result {
+                        self.handle_response_success(request_type, response_result);
+                    }
+                }
+            }
+        }
+        else if let Ok(_) = serde_json::from_str::<GenericNotification>(message) {
+            // Atm we don't handle requests
+        }
+        else if let Ok(_) = serde_json::from_str::<GenericRequest>(message) {
+            // Atm we don't handle requests
         }
     }
 
@@ -305,6 +334,10 @@ impl Editor {
                                 Editor::process_document_change(did_change_notification, buffer, lsp_client);
                             }
                         },
+                        // CTRL+A (Select all)
+                        (0x41, true) => {
+                            buffer.select_all();
+                        }
                         _ => {}
                     }
                     self.force_caret_visible();

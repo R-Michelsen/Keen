@@ -94,6 +94,7 @@ pub enum CompletionItemTags {
 }
 
 #[allow(dead_code)]
+#[derive(PartialEq)]
 pub enum ErrorCodes {
 	ParseError = -32700,
 	InvalidRequest = -32600,
@@ -105,7 +106,27 @@ pub enum ErrorCodes {
 	ServerNotInitialized = -32002,
 	UnknownErrorCode = -32001,
 	RequestCancelled = -32800,
-	ContentModified = -32801
+    ContentModified = -32801,
+    Unknown = 0
+}
+
+impl ErrorCodes {
+    pub fn from_i64(int: i64) -> ErrorCodes {
+        match int {
+            -32700 => ErrorCodes::ParseError,
+            -32600 => ErrorCodes::InvalidRequest,
+            -32601 => ErrorCodes::MethodNotFound,
+            -32602 => ErrorCodes::InvalidParams,
+            -32603 => ErrorCodes::InternalError,
+            -32099 => ErrorCodes::ServerErrorStart,
+            -32000 => ErrorCodes::ServerErrorEnd,
+            -32002 => ErrorCodes::ServerNotInitialized,
+            -32001 => ErrorCodes::UnknownErrorCode,
+            -32800 => ErrorCodes::RequestCancelled,
+            -32801 => ErrorCodes::ContentModified,
+            _ => ErrorCodes::Unknown
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -342,6 +363,14 @@ impl RustSemanticTokenModifiers {
 /**************************************
 *********** NOTIFICATIONS *************
 ***************************************/
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenericNotification {
+    pub jsonrpc: String,
+    pub method: String,
+    pub params: Option<Value>
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextDocumentItem {
@@ -468,6 +497,15 @@ impl InitializeNotification {
 /**************************************
 ************** REQUESTS ***************
 ***************************************/
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenericRequest {
+    pub jsonrpc: String,
+    pub id: i64,
+    pub method: String,
+    pub params: Option<Value>
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeRequest {
