@@ -8,11 +8,13 @@ use std::{
 use winapi::shared::windef::HWND;
 use winapi::um::winuser::{ VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_TAB, VK_RETURN, VK_DELETE, VK_BACK};
 
+use crate::settings::{SCROLL_LINES_PER_MOUSEMOVE, SCROLL_LINES_PER_ROLL, NUMBER_OF_SPACES_PER_TAB};
 use crate::renderer::TextRenderer;
 use crate::lsp_client::{LSPClient, LSPRequestType};
-use crate::lsp_structs::*;
-use crate::settings::*;
-use crate::language_support::*;
+use crate::lsp_structs::{SemanticTokenResult, GenericNotification, GenericRequest, 
+    GenericResponse, DidChangeNotification, ResponseError, ErrorCodes};
+use crate::language_support::{CPP_FILE_EXTENSIONS, CPP_LSP_SERVER, CPP_LANGUAGE_IDENTIFIER, 
+    RUST_LSP_SERVER, RUST_FILE_EXTENSIONS, RUST_LANGUAGE_IDENTIFIER};
 use crate::buffer::{ TextBuffer, SelectionMode, MouseSelectionMode };
 
 type MousePos = (f32, f32);

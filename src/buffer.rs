@@ -27,8 +27,9 @@ use ropey::Rope;
 
 use crate::dx_ok;
 use crate::settings::NUMBER_OF_SPACES_PER_TAB;
-use crate::lsp_structs::*;
-use crate::language_support::*;
+use crate::lsp_structs::{Range, Position, DidChangeNotification, TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier,
+    SemanticTokenTypes, CppSemanticTokenTypes, RustSemanticTokenTypes, RustSemanticTokenModifiers};
+use crate::language_support;
 use crate::renderer::TextRenderer;
 
 #[derive(PartialEq)]
@@ -826,7 +827,7 @@ impl TextBuffer {
     // from the text buffer displayed on the screen
     pub fn get_lexical_highlights(&mut self) -> Vec<(DWRITE_TEXT_RANGE, SemanticTokenTypes)> {
         let text_in_current_view = self.buffer.slice(self.absolute_char_pos_start..self.absolute_char_pos_end).to_string();
-        highlight_text(text_in_current_view.as_str(), self.language_identifier)
+        language_support::highlight_text(text_in_current_view.as_str(), self.language_identifier)
     }
 
     // Processes the semantic tokens received from the language server
