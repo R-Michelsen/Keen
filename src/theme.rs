@@ -1,9 +1,10 @@
+use crate::dx_ok;
+
 use std::ptr::null_mut;
 use winapi::{
-    um::d2d1::{ ID2D1SolidColorBrush, ID2D1HwndRenderTarget, D2D1_BRUSH_PROPERTIES, D2D1_MATRIX_3X2_F },
-    shared::d3d9types::D3DCOLORVALUE
+    shared::d3d9types::D3DCOLORVALUE,
+    um::d2d1::{ ID2D1SolidColorBrush, ID2D1HwndRenderTarget, D2D1_BRUSH_PROPERTIES, D2D1_MATRIX_3X2_F }
 };
-use crate::dx_ok;
 
 const IDENTITY_MATRIX: D2D1_MATRIX_3X2_F = D2D1_MATRIX_3X2_F { matrix: [[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]] };
 

@@ -1,18 +1,27 @@
+use crate::dx_ok;
+use crate::settings::NUMBER_OF_SPACES_PER_TAB;
+use crate::lsp_structs::{Range, Position, DidChangeNotification, TextDocumentContentChangeEvent, 
+                    VersionedTextDocumentIdentifier, SemanticTokenTypes, CppSemanticTokenTypes, 
+                    RustSemanticTokenTypes, RustSemanticTokenModifiers};
+use crate::language_support;
+use crate::renderer::TextRenderer;
+
 use core::ops::RangeBounds;
 use std::{
     cell::RefCell,
+    char,
     cmp::{ min, max },
-    fs::File,
     ffi::OsStr,
+    fs::File,
     iter::once,
+    mem::{MaybeUninit, swap},
     os::windows::ffi::OsStrExt,
     ptr::{copy_nonoverlapping, null_mut},
-    mem::{ swap, MaybeUninit },
     rc::Rc,
-    char,
-    str,
+    str
 };
 use winapi::{
+    ctypes::c_void,
     um::{
         dwrite::{ IDWriteTextLayout, DWRITE_HIT_TEST_METRICS, DWRITE_TEXT_RANGE },
         d2d1::{ D2D1_RECT_F, D2D1_LAYER_PARAMETERS },
@@ -20,17 +29,10 @@ use winapi::{
         winuser::{ SystemParametersInfoW, SPI_GETCARETWIDTH, OpenClipboard, CloseClipboard,
             EmptyClipboard, GetClipboardData, SetClipboardData, CF_TEXT}
     },
-    shared::windef::HWND,
-    ctypes::c_void
+    shared::windef::HWND
 };
-use ropey::Rope;
 
-use crate::dx_ok;
-use crate::settings::NUMBER_OF_SPACES_PER_TAB;
-use crate::lsp_structs::{Range, Position, DidChangeNotification, TextDocumentContentChangeEvent, VersionedTextDocumentIdentifier,
-    SemanticTokenTypes, CppSemanticTokenTypes, RustSemanticTokenTypes, RustSemanticTokenModifiers};
-use crate::language_support;
-use crate::renderer::TextRenderer;
+use ropey::Rope;
 
 #[derive(PartialEq)]
 pub enum SelectionMode {
@@ -875,7 +877,7 @@ impl TextBuffer {
             }
 
             match self.language_identifier {
-                CPP_LANGUAGE_IDENTIFIER => {
+                language_support::CPP_LANGUAGE_IDENTIFIER => {
                     let token_type = CppSemanticTokenTypes::to_semantic_token_type(CppSemanticTokenTypes::from_u32(self.semantic_tokens[i + 3]));
                     let line_absolute_pos = self.buffer.line_to_char((line as i32 + line_offset) as usize);
                     let range = DWRITE_TEXT_RANGE {
@@ -884,7 +886,7 @@ impl TextBuffer {
                     };
                     highlights.push((range, token_type));
                 },
-                RUST_LANGUAGE_IDENTIFIER => {
+                language_support::RUST_LANGUAGE_IDENTIFIER => {
                     let token_type = RustSemanticTokenTypes::to_semantic_token_type(RustSemanticTokenTypes::from_u32(self.semantic_tokens[i + 3]));
                     let line_absolute_pos = self.buffer.line_to_char((line as i32 + line_offset) as usize);
                     let range = DWRITE_TEXT_RANGE {

@@ -1,3 +1,8 @@
+use crate::settings;
+use crate::buffer::TextBuffer;
+use crate::theme::Theme;
+use crate::lsp_structs::SemanticTokenTypes;
+
 use std::{
     ptr::null_mut,
     mem::MaybeUninit,
@@ -6,11 +11,10 @@ use std::{
     os::windows::ffi::OsStrExt
 };
 use winapi::{
+    ctypes::c_void,
+    Interface,
     um::{
-        winuser::{ GetClientRect, GetDpiForWindow },
-        dcommon::{
-            D2D1_ALPHA_MODE_UNKNOWN, D2D1_PIXEL_FORMAT
-        },
+        dcommon::{D2D1_ALPHA_MODE_UNKNOWN, D2D1_PIXEL_FORMAT},
         dwrite::{
             DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, 
             IDWriteTextLayout, DWRITE_WORD_WRAPPING_NO_WRAP,
@@ -31,22 +35,16 @@ use winapi::{
             D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_ANTIALIAS_MODE_ALIASED,
             D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
         },
-        unknwnbase::IUnknown
+        unknwnbase::IUnknown,
+        winuser::{GetClientRect, GetDpiForWindow}
     },
     shared::{
         dxgiformat::DXGI_FORMAT_UNKNOWN,
         windef::{
             RECT, HWND
         }
-    },
-    ctypes::c_void,
-    Interface
+    }
 };
-
-use crate::settings;
-use crate::buffer::TextBuffer;
-use crate::theme::Theme;
-use crate::lsp_structs::SemanticTokenTypes;
 
 #[macro_export]
 #[cfg(debug_assertions)]

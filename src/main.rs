@@ -11,6 +11,9 @@ mod lsp_structs;
 mod settings;
 mod language_support;
 
+use editor::{ Editor, EditorCommand };
+use settings::MAX_LSP_RESPONSE_SIZE;
+
 use std::{
     alloc::{dealloc, Layout},
     ffi::OsStr,
@@ -63,9 +66,6 @@ use winapi::{
     },
     ctypes::c_void
 };
-
-use editor::{ Editor, EditorCommand };
-use settings::MAX_LSP_RESPONSE_SIZE;
 
 const WM_CARET_VISIBLE:     u32 = 0xC000;
 const WM_CARET_INVISIBLE:   u32 = 0xC001;
