@@ -1,23 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const CPP_KEYWORDS: [&str; 92] = ["alignas", "alignof", "and", "and_eq", "asm", 
-"auto", "bitand", "bitor", "bool", "break", "case", "catch", "char", "char8_t", "char16_t", 
-"char32_t", "class", "compl", "concept", "const", "consteval", "constexpr", "constinit", 
-"const_cast", "continue", "co_await", "co_return", "co_yield", "decltype", "default", "delete", 
-"do", "double", "dynamic_cast", "else", "enum", "explicit", "export", "extern", "false", "float", 
-"for", "friend", "goto", "if", "inline", "int", "long", "mutable", "namespace", "new", "noexcept", "not", 
-"not_eq", "nullptr", "operator", "or", "or_eq", "private", "protected", "public", "register", "reinterpret_cast", 
-"requires", "return", "short", "signed", "sizeof", "static", "static_assert", "static_cast", "struct", "switch", 
-"template", "this", "thread_local", "throw", "true", "try", "typedef", "typeid", "typename", "union", "unsigned", "using", 
-"virtual", "void", "volatile", "wchar_t", "while", "xor", "xor_eq"];
-pub const CPP_FILE_EXTENSIONS: [&str; 5] = ["c", "h", "cpp", "hpp", "cxx"];
-pub const CPP_LSP_SERVER: &str = "clangd";
-pub const CPP_LANGUAGE_IDENTIFIER: &str = "cpp";
-pub const RUST_FILE_EXTENSIONS: [&str; 1] = ["rs"];
-pub const RUST_LSP_SERVER: &str = "rust-analyzer";
-pub const RUST_LANGUAGE_IDENTIFIER: &str = "rust";
-
 type DocumentUri = String;
 type MarkupKind = String;
 type CodeActionKind = String;
@@ -148,7 +131,8 @@ pub enum SemanticTokenTypes {
     Keyword,
     Literal,
     Macro,
-    Preprocessor
+    Preprocessor,
+    Primitive
 }
 
 #[derive(Debug)]
@@ -209,7 +193,7 @@ impl CppSemanticTokenTypes {
             CppSemanticTokenTypes::Parameter         => SemanticTokenTypes::None,
             CppSemanticTokenTypes::Function          => SemanticTokenTypes::Function,
             CppSemanticTokenTypes::Method            => SemanticTokenTypes::Method,
-            CppSemanticTokenTypes::StaticMethod      => SemanticTokenTypes::Method,
+            CppSemanticTokenTypes::StaticMethod      => SemanticTokenTypes::Function,
             CppSemanticTokenTypes::Field             => SemanticTokenTypes::None,
             CppSemanticTokenTypes::StaticField       => SemanticTokenTypes::None,
             CppSemanticTokenTypes::Class             => SemanticTokenTypes::Class,
@@ -221,7 +205,7 @@ impl CppSemanticTokenTypes {
             CppSemanticTokenTypes::Namespace         => SemanticTokenTypes::None,
             CppSemanticTokenTypes::TemplateParameter => SemanticTokenTypes::None,
             CppSemanticTokenTypes::Concept           => SemanticTokenTypes::None,
-            CppSemanticTokenTypes::Primitive         => SemanticTokenTypes::None,
+            CppSemanticTokenTypes::Primitive         => SemanticTokenTypes::Primitive,
             CppSemanticTokenTypes::Macro             => SemanticTokenTypes::Macro,
             CppSemanticTokenTypes::InactiveCode      => SemanticTokenTypes::None
         }
@@ -316,10 +300,10 @@ impl RustSemanticTokenTypes {
             RustSemanticTokenTypes::Parameter           => SemanticTokenTypes::None,
             RustSemanticTokenTypes::Label               => SemanticTokenTypes::None,
             RustSemanticTokenTypes::Attribute           => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::BuiltinType         => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::EnumMember          => SemanticTokenTypes::Variable,
-            RustSemanticTokenTypes::Lifetime            => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::TypeAlias           => SemanticTokenTypes::None,
+            RustSemanticTokenTypes::BuiltinType         => SemanticTokenTypes::Primitive,
+            RustSemanticTokenTypes::EnumMember          => SemanticTokenTypes::None,
+            RustSemanticTokenTypes::Lifetime            => SemanticTokenTypes::Literal,
+            RustSemanticTokenTypes::TypeAlias           => SemanticTokenTypes::Class,
             RustSemanticTokenTypes::Union               => SemanticTokenTypes::None,
             RustSemanticTokenTypes::UnresolvedReference => SemanticTokenTypes::None
         }

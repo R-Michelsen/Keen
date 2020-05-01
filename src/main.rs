@@ -9,6 +9,7 @@ mod buffer;
 mod lsp_client;
 mod lsp_structs;
 mod settings;
+mod language_support;
 
 use std::{
     alloc::{dealloc, Layout},
@@ -83,8 +84,8 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         // Set the box to be carried over to subsequent callbacks
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, (*uninit_editor).as_mut_ptr() as isize);
         editor = (*uninit_editor).as_mut_ptr();
-        // (*editor).open_file("C:/Users/Rasmus/Desktop/Yarr/source/AppEditorLogic.cpp");
-        (*editor).open_file("C:/Users/Rasmus/Desktop/keen/src/editor.rs");
+        (*editor).open_file("C:/Users/Rasmus/Desktop/Yarr/source/AppEditorLogic.cpp");
+        // (*editor).open_file("C:/Users/Rasmus/Desktop/keen/src/editor.rs");
     }
     else {
         editor = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Editor;

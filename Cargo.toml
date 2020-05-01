@@ -5,7 +5,7 @@ authors = ["Rasmus Michelsen <RMichelsen@Protonmail.com>"]
 edition = "2018"
 
 [dependencies]
-winapi = { version = "0.3.8", features = ["d2d1", "dwrite", "errhandlingapi", "winuser", "windowsx"] }
+winapi = { version = "0.3.8", features = ["d2d1", "dwrite", "errhandlingapi", "winbase", "winuser", "windowsx"] }
 ropey = "1.1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

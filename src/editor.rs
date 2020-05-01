@@ -6,13 +6,13 @@ use std::{
     path::Path
 };
 use winapi::shared::windef::HWND;
-use winapi::um::winuser::{ VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_TAB, VK_RETURN, VK_DELETE, VK_BACK };
+use winapi::um::winuser::{ VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_TAB, VK_RETURN, VK_DELETE, VK_BACK};
 
 use crate::renderer::TextRenderer;
-use crate::lsp_client::LSPClient;
-use crate::lsp_client::LSPRequestType;
+use crate::lsp_client::{LSPClient, LSPRequestType};
 use crate::lsp_structs::*;
 use crate::settings::*;
+use crate::language_support::*;
 use crate::buffer::{ TextBuffer, SelectionMode, MouseSelectionMode };
 
 type MousePos = (f32, f32);
@@ -337,6 +337,27 @@ impl Editor {
                         // CTRL+A (Select all)
                         (0x41, true) => {
                             buffer.select_all();
+                        }
+                        // CTRL+C (Copy)
+                        (0x43, true) => {
+                            buffer.copy_selection(self.hwnd);
+                        },
+                        // CTRL+X (Cut)
+                        (0x58, true) => {
+                            let did_change_notification = buffer.cut_selection(self.hwnd);
+                            if let Some(lsp_client) = self.lsp_client.as_mut() {
+                                Editor::process_document_change(did_change_notification, buffer, lsp_client);
+                            }
+                        },
+                        // CTRL+V (Paste)
+                        (0x56, true) => {
+                            let did_change_notification = buffer.paste(self.hwnd);
+                            if let Some(lsp_client) = self.lsp_client.as_mut() {
+                                match did_change_notification {
+                                    None => {},
+                                    Some(notification) => Editor::process_document_change(notification, buffer, lsp_client)
+                                }
+                            }
                         }
                         _ => {}
                     }

@@ -9,6 +9,7 @@ use winapi::{shared::windef::HWND, um::winuser::SendMessageW};
 use serde_json::to_value;
 
 use crate::lsp_structs::*;
+use crate::language_support::*;
 use crate::WM_LSP_RESPONSE;
 use crate::WM_LSP_CRASH;
 use crate::settings::MAX_LSP_RESPONSE_SIZE;
