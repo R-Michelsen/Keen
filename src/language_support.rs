@@ -30,19 +30,11 @@ pub const RUST_LANGUAGE_IDENTIFIER: &str = "rust";
 pub fn highlight_text(text: &str, language_identifier: &'static str) -> Vec<(DWRITE_TEXT_RANGE, SemanticTokenTypes)> {
     let mut highlights = Vec::new();
 
-    // Singleline comments style
-    let sl_comment = match language_identifier {
-        CPP_LANGUAGE_IDENTIFIER => "//",
-        RUST_LANGUAGE_IDENTIFIER => "//",
-        _ => "//"
-    };
-
-    // Multiline comments style
-    let ml_comment = match language_identifier {
-        CPP_LANGUAGE_IDENTIFIER => ["/*", "*/"],
-        RUST_LANGUAGE_IDENTIFIER => ["/*", "*/"],
-        _ => ["/*", "*/"]
-    };
+    // Singleline and multiline comments style
+    // can convert to a match statement 
+    // once languages with different styles are introduced
+    let sl_comment =  "//";
+    let ml_comment = ["/*", "*/"];
 
     let string_literal = '"';
     let escaped_string_literal = "\\\"";
@@ -132,7 +124,7 @@ pub fn highlight_text(text: &str, language_identifier: &'static str) -> Vec<(DWR
                 };
                 highlights.push((range, SemanticTokenTypes::Keyword));
             }
-            else if language_identifier == CPP_LANGUAGE_IDENTIFIER && identifier.starts_with("#") {
+            else if language_identifier == CPP_LANGUAGE_IDENTIFIER && identifier.starts_with('#') {
                 let range = DWRITE_TEXT_RANGE {
                     startPosition: (offset - identifier.len()) as u32,
                     length: identifier.len() as u32

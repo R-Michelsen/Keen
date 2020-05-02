@@ -32,7 +32,7 @@ pub struct LSPClient {
 }
 
 impl LSPClient {
-    pub fn new(hwnd: HWND, client_name: &'static str) -> LSPClient {
+    pub fn new(hwnd: HWND, client_name: &'static str) -> Self {
         // Spawn an instance of the language server
         let mut lsp = Command::new(client_name)
             .stdin(Stdio::piped())
@@ -44,7 +44,7 @@ impl LSPClient {
         let mut stdout = lsp.stdout.take().unwrap();
         let hwnd_clone = hwnd as u64;
 
-        LSPClient {
+        Self {
             client_name,
             request_id: 0,
             request_types: Vec::new(),
@@ -62,7 +62,7 @@ impl LSPClient {
                         let mut content_length = 0;
                         let mut remaining_length = 0;
                         if let Ok(()) = stdout.read_exact(header) {
-                            if header.starts_with("Content-Length: ".as_bytes()) {
+                            if header.starts_with(b"Content-Length: ") {
                                 // Parse the header to get the length of the content following
                                 // The header ends when the second "\r\n" is encountered
                                 let mut number_string = String::new();
@@ -91,7 +91,7 @@ impl LSPClient {
                             }
                         }
 
-                        let content: &mut [u8] = core::slice::from_raw_parts_mut(allocation.offset(header_size as isize), remaining_length);
+                        let content: &mut [u8] = core::slice::from_raw_parts_mut(allocation.add(header_size), remaining_length);
                         if let Ok(()) = stdout.read_exact(content) {
                             let range = (content_length_bytes as i32, content_length as i32);
                             SendMessageW(hwnd_clone as HWND, WM_LSP_RESPONSE, allocation as usize, std::mem::transmute::<(i32, i32), isize>(range));
@@ -106,7 +106,7 @@ impl LSPClient {
         let message = format!("Content-Length: {}\r\n\r\n{}", request.len(), request);
 
         // TODO: Handle IO errors
-        self.stdin.write(message.as_bytes()).unwrap();
+        self.stdin.write_all(message.as_bytes()).unwrap();
 
         self.request_types.push(request_type);
         self.request_id += 1;
@@ -116,10 +116,10 @@ impl LSPClient {
         let message = format!("Content-Length: {}\r\n\r\n{}", notification.len(), notification);
 
         // TODO: Handle IO errors
-        self.stdin.write(message.as_bytes()).unwrap();
+        self.stdin.write_all(message.as_bytes()).unwrap();
     }
 
-    pub fn send_did_change_notification(&mut self, did_change_notification: DidChangeNotification) {
+    pub fn send_did_change_notification(&mut self, did_change_notification: &DidChangeNotification) {
         let serialized_did_change_notification = serde_json::to_string(&did_change_notification).unwrap();
         self.send_notification(serialized_did_change_notification.as_str());
     }

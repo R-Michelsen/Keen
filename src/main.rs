@@ -106,92 +106,92 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             // it is NOT done by the LSP thread itself
             dealloc(data, Layout::from_size_align(MAX_LSP_RESPONSE_SIZE, 8).unwrap());
             InvalidateRect(hwnd, null_mut(), false as i32);
-            return 0;
+            0
         },
         WM_LSP_CRASH => {
             let len = lparam as usize;
             let client = std::str::from_utf8(std::slice::from_raw_parts(wparam as *const u8, len)).unwrap();
-            (*editor).execute_command(EditorCommand::LSPClientCrash(client));
-            return 0;
+            (*editor).execute_command(&EditorCommand::LSPClientCrash(client));
+            0
         },
         WM_CARET_VISIBLE => {
-            (*editor).execute_command(EditorCommand::CaretVisible);
+            (*editor).execute_command(&EditorCommand::CaretVisible);
             InvalidateRect(hwnd, null_mut(), false as i32);
-            return 0;
+            0
         },
         WM_CARET_INVISIBLE => {
-            (*editor).execute_command(EditorCommand::CaretInvisible);
+            (*editor).execute_command(&EditorCommand::CaretInvisible);
             InvalidateRect(hwnd, null_mut(), false as i32);
-            return 0;
+            0
         },
         WM_PAINT => {
             let mut ps = MaybeUninit::<PAINTSTRUCT>::uninit();
             BeginPaint(hwnd, ps.as_mut_ptr());
             (*editor).draw();
             EndPaint(hwnd, ps.as_mut_ptr());
-            return 0;
+            0
         },
         WM_ERASEBKGND => {
-            return 0;
+            0
         }
         WM_SIZE => {
             let width = LOWORD(lparam as u32);
             let height = HIWORD(lparam as u32);
             (*editor).resize(width.into(), height.into());
             InvalidateRect(hwnd, null_mut(), false as i32);
-            return 0;
+            0
         },
         WM_DESTROY | WM_NCDESTROY => {
             PostQuitMessage(0);
-            return 0;
+            0
         },
         WM_CHAR => {
             if wparam >= 0x20 && wparam <= 0x7E {
-                (*editor).execute_command(EditorCommand::CharInsert(wparam as u16));
+                (*editor).execute_command(&EditorCommand::CharInsert(wparam as u16));
             }
-            return 0;
+            0
         },
         WM_MOUSEWHEEL => {
             if GET_WHEEL_DELTA_WPARAM(wparam) > 0 {
-                (*editor).execute_command(EditorCommand::ScrollUp);
+                (*editor).execute_command(&EditorCommand::ScrollUp);
             }
             else {
-                (*editor).execute_command(EditorCommand::ScrollDown);
+                (*editor).execute_command(&EditorCommand::ScrollDown);
             }
             InvalidateRect(hwnd, null_mut(), false as i32);
-            return 0;
+            0
         },
         WM_LBUTTONDOWN => {
             SetCapture(hwnd);
             let mouse_pos = (GET_X_LPARAM(lparam) as f32, GET_Y_LPARAM(lparam) as f32);
-            (*editor).execute_command(EditorCommand::LeftClick(mouse_pos, shift_down));
+            (*editor).execute_command(&EditorCommand::LeftClick(mouse_pos, shift_down));
             InvalidateRect(hwnd, null_mut(), false as i32);
-            return 0;
+            0
         },
         WM_LBUTTONDBLCLK => {
             let mouse_pos = (GET_X_LPARAM(lparam) as f32, GET_Y_LPARAM(lparam) as f32);
-            (*editor).execute_command(EditorCommand::LeftDoubleClick(mouse_pos));
+            (*editor).execute_command(&EditorCommand::LeftDoubleClick(mouse_pos));
             InvalidateRect(hwnd, null_mut(), false as i32);
-            return 0;
+            0
         }
         WM_LBUTTONUP => {
             ReleaseCapture();
-            (*editor).execute_command(EditorCommand::LeftRelease);
+            (*editor).execute_command(&EditorCommand::LeftRelease);
             InvalidateRect(hwnd, null_mut(), false as i32);
-            return 0;
+            0
         },
         WM_KEYDOWN => {
-            (*editor).execute_command(EditorCommand::KeyPressed(wparam as i32, shift_down, ctrl_down));
+            (*editor).execute_command(&EditorCommand::KeyPressed(wparam as i32, shift_down, ctrl_down));
             InvalidateRect(hwnd, null_mut(), false as i32);
-            return 0;
+            0
         },
         WM_MOUSEMOVE => {
             let mouse_pos = (GET_X_LPARAM(lparam) as f32, GET_Y_LPARAM(lparam) as f32);
-            (*editor).execute_command(EditorCommand::MouseMove(mouse_pos));
+            (*editor).execute_command(&EditorCommand::MouseMove(mouse_pos));
             if (*editor).selection_active() {
                 InvalidateRect(hwnd, null_mut(), false as i32);
             }
-            return 0;
+            0
         },
         _ => DefWindowProcW(hwnd, msg, wparam, lparam)
     }

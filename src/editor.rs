@@ -48,10 +48,10 @@ pub struct Editor {
 }
 
 impl Editor {
-    pub fn new(hwnd: HWND) -> Editor {
-        Editor {
+    pub fn new(hwnd: HWND) -> Self {
+        Self {
             hwnd,
-            renderer: Rc::new(RefCell::new(TextRenderer::new(hwnd.clone(), "Fira Code Retina", 20.0))),
+            renderer: Rc::new(RefCell::new(TextRenderer::new(hwnd, "Fira Code Retina", 20.0))),
             lsp_client: None,
             buffers: HashMap::new(),
             current_buffer: "".to_owned(),
@@ -94,12 +94,12 @@ impl Editor {
         // once the LSP Client is actually initialized.
         match &self.lsp_client {
             None if CPP_FILE_EXTENSIONS.contains(&extension) => {
-                self.lsp_client = Some(LSPClient::new(self.hwnd.clone(), CPP_LSP_SERVER));
+                self.lsp_client = Some(LSPClient::new(self.hwnd, CPP_LSP_SERVER));
                 self.lsp_client.as_mut().unwrap().send_initialize_request(path.to_owned());
                 return;
             },
             None if RUST_FILE_EXTENSIONS.contains(&extension) => {
-                self.lsp_client = Some(LSPClient::new(self.hwnd.clone(), RUST_LSP_SERVER));
+                self.lsp_client = Some(LSPClient::new(self.hwnd, RUST_LSP_SERVER));
                 self.lsp_client.as_mut().unwrap().send_initialize_request(path.to_owned());
                 return;
             },
@@ -120,8 +120,11 @@ impl Editor {
 
     pub fn resize(&mut self, width: u32, height: u32) {
         self.renderer.borrow_mut().resize(width, height);
-        for (_, buffer) in self.buffers.iter_mut() {
-            buffer.update_metrics((0.0, 0.0), (self.renderer.borrow().pixel_size.width as f32, self.renderer.borrow().pixel_size.height as f32));
+        for buffer in self.buffers.values_mut() {
+            buffer.update_metrics(
+                (0.0, 0.0), 
+                (self.renderer.borrow().pixel_size.width as f32, self.renderer.borrow().pixel_size.height as f32)
+            );
         }
     }
 
@@ -142,13 +145,13 @@ impl Editor {
         }
     }
 
-    fn handle_response_error(&mut self, request_type: LSPRequestType, response_error: ResponseError) {
+    fn handle_response_error(&mut self, request_type: LSPRequestType, response_error: &ResponseError) {
         match request_type {
             LSPRequestType::InitializationRequest(_) => {},
             LSPRequestType::SemanticTokenRequest(uri) => {
                 // If the semantic token request fails
                 // due to content changed, send a new one
-                if ErrorCodes::from_i64(response_error.code) == ErrorCodes::ContentModified {
+                if ErrorCodes::from_i64((*response_error).code) == ErrorCodes::ContentModified {
                     if let Some(lsp_client) = self.lsp_client.as_mut() {
                         lsp_client.send_semantic_token_request(uri);
                     }
@@ -212,14 +215,12 @@ impl Editor {
 
                 // Handle any errors
                 if let Some(response_error) = response.error {
-                    self.handle_response_error(request_type, response_error)
+                    self.handle_response_error(request_type, &response_error)
                 }
                 // Spec says result is guaranteed to be Some(), when there is no error
                 // rust-analyzer doesn't seem to honor this so we have to check it
-                else {
-                    if let Some(response_result) = response.result {
+                else if let Some(response_result) = response.result {
                         self.handle_response_success(request_type, response_result);
-                    }
                 }
             }
         }
@@ -231,7 +232,7 @@ impl Editor {
         }
     }
 
-    pub fn process_document_change(did_change_notification: DidChangeNotification, buffer: &mut TextBuffer, lsp_client: &mut LSPClient) {
+    pub fn process_document_change(did_change_notification: &DidChangeNotification, buffer: &mut TextBuffer, lsp_client: &mut LSPClient) {
         // rust-analyzer only supports full change notifications
         match buffer.language_identifier {
             CPP_LANGUAGE_IDENTIFIER => {
@@ -240,16 +241,16 @@ impl Editor {
             },
             RUST_LANGUAGE_IDENTIFIER => {
                 let full_did_change_notification = buffer.get_full_did_change_notification();
-                lsp_client.send_did_change_notification(full_did_change_notification);
+                lsp_client.send_did_change_notification(&full_did_change_notification);
                 lsp_client.send_semantic_token_request(buffer.get_uri());
             },
             _ => {}
         }
     }
 
-    pub fn execute_command(&mut self, cmd: EditorCommand) {
+    pub fn execute_command(&mut self, cmd: &EditorCommand) {
         if let Some(buffer) = self.buffers.get_mut(&self.current_buffer) {
-            match cmd {
+            match *cmd {
                 EditorCommand::CaretVisible | EditorCommand::CaretInvisible if self.force_visible_caret_timer > 0 => {
                     self.force_visible_caret_timer = self.force_visible_caret_timer.saturating_sub(1);
                     self.caret_is_visible = true;
@@ -298,7 +299,7 @@ impl Editor {
                         (VK_TAB, _)        => {
                             let did_change_notification = buffer.insert_chars(" ".repeat(NUMBER_OF_SPACES_PER_TAB).as_str());
                             if let Some(lsp_client) = self.lsp_client.as_mut() {
-                                Editor::process_document_change(did_change_notification, buffer, lsp_client);
+                                Self::process_document_change(&did_change_notification, buffer, lsp_client);
                             }
                         },
                         (VK_RETURN, true)  => {
@@ -309,31 +310,31 @@ impl Editor {
                         (VK_RETURN, false) => {
                             let did_change_notification = buffer.insert_chars("\r\n");
                             if let Some(lsp_client) = self.lsp_client.as_mut() {
-                                Editor::process_document_change(did_change_notification, buffer, lsp_client);
+                                Self::process_document_change(&did_change_notification, buffer, lsp_client);
                             }
                         },
                         (VK_DELETE, false) => {
                             let did_change_notification = buffer.delete_right();
                             if let Some(lsp_client) = self.lsp_client.as_mut() {
-                                Editor::process_document_change(did_change_notification, buffer, lsp_client);
+                                Self::process_document_change(&did_change_notification, buffer, lsp_client);
                             }
                         },
                         (VK_DELETE, true) => {
                             let did_change_notification = buffer.delete_right_by_word();
                             if let Some(lsp_client) = self.lsp_client.as_mut() {
-                                Editor::process_document_change(did_change_notification, buffer, lsp_client);
+                                Self::process_document_change(&did_change_notification, buffer, lsp_client);
                             }
                         },
                         (VK_BACK, false) => {
                             let did_change_notification = buffer.delete_left();
                             if let Some(lsp_client) = self.lsp_client.as_mut() {
-                                Editor::process_document_change(did_change_notification, buffer, lsp_client);
+                                Self::process_document_change(&did_change_notification, buffer, lsp_client);
                             }
                         },
                         (VK_BACK, true) => {
                             let did_change_notification = buffer.delete_left_by_word();
                             if let Some(lsp_client) = self.lsp_client.as_mut() {
-                                Editor::process_document_change(did_change_notification, buffer, lsp_client);
+                                Self::process_document_change(&did_change_notification, buffer, lsp_client);
                             }
                         },
                         // CTRL+A (Select all)
@@ -348,7 +349,7 @@ impl Editor {
                         (0x58, true) => {
                             let did_change_notification = buffer.cut_selection(self.hwnd);
                             if let Some(lsp_client) = self.lsp_client.as_mut() {
-                                Editor::process_document_change(did_change_notification, buffer, lsp_client);
+                                Self::process_document_change(&did_change_notification, buffer, lsp_client);
                             }
                         },
                         // CTRL+V (Paste)
@@ -357,7 +358,7 @@ impl Editor {
                             if let Some(lsp_client) = self.lsp_client.as_mut() {
                                 match did_change_notification {
                                     None => {},
-                                    Some(notification) => Editor::process_document_change(notification, buffer, lsp_client)
+                                    Some(notification) => Self::process_document_change(&notification, buffer, lsp_client)
                                 }
                             }
                         }
@@ -368,7 +369,7 @@ impl Editor {
                 EditorCommand::CharInsert(character) => {
                     let did_change_notification = buffer.insert_char(character);
                     if let Some(lsp_client) = self.lsp_client.as_mut() {
-                        Editor::process_document_change(did_change_notification, buffer, lsp_client);
+                        Self::process_document_change(&did_change_notification, buffer, lsp_client);
                     }
                     self.force_caret_visible();
                 }

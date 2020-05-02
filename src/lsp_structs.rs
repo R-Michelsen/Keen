@@ -94,20 +94,20 @@ pub enum ErrorCodes {
 }
 
 impl ErrorCodes {
-    pub fn from_i64(int: i64) -> ErrorCodes {
+    pub fn from_i64(int: i64) -> Self {
         match int {
-            -32700 => ErrorCodes::ParseError,
-            -32600 => ErrorCodes::InvalidRequest,
-            -32601 => ErrorCodes::MethodNotFound,
-            -32602 => ErrorCodes::InvalidParams,
-            -32603 => ErrorCodes::InternalError,
-            -32099 => ErrorCodes::ServerErrorStart,
-            -32000 => ErrorCodes::ServerErrorEnd,
-            -32002 => ErrorCodes::ServerNotInitialized,
-            -32001 => ErrorCodes::UnknownErrorCode,
-            -32800 => ErrorCodes::RequestCancelled,
-            -32801 => ErrorCodes::ContentModified,
-            _ => ErrorCodes::Unknown
+            -32700 => Self::ParseError,
+            -32600 => Self::InvalidRequest,
+            -32601 => Self::MethodNotFound,
+            -32602 => Self::InvalidParams,
+            -32603 => Self::InternalError,
+            -32099 => Self::ServerErrorStart,
+            -32000 => Self::ServerErrorEnd,
+            -32002 => Self::ServerNotInitialized,
+            -32001 => Self::UnknownErrorCode,
+            -32800 => Self::RequestCancelled,
+            -32801 => Self::ContentModified,
+            _      => Self::Unknown
         }
     }
 }
@@ -156,58 +156,53 @@ pub enum CppSemanticTokenTypes {
 	Concept = 16,
 	Primitive = 17,
 	Macro = 18,
-    InactiveCode = 19
+    InactiveCode = 19,
+    Unknown = 20
 }
 
 impl CppSemanticTokenTypes {
-    pub fn from_u32(uint: u32) -> CppSemanticTokenTypes {
+    pub fn from_u32(uint: u32) -> Self {
         match uint {
-            0  => CppSemanticTokenTypes::Variable,
-            1  => CppSemanticTokenTypes::LocalVariable,
-            2  => CppSemanticTokenTypes::Parameter,
-            3  => CppSemanticTokenTypes::Function,
-            4  => CppSemanticTokenTypes::Method,
-            5  => CppSemanticTokenTypes::StaticMethod,
-            6  => CppSemanticTokenTypes::Field,
-            7  => CppSemanticTokenTypes::StaticField,
-            8  => CppSemanticTokenTypes::Class,
-            9  => CppSemanticTokenTypes::Enum,
-            10 => CppSemanticTokenTypes::EnumConstant,
-            11 => CppSemanticTokenTypes::Typedef,
-            12 => CppSemanticTokenTypes::DependentType,
-            13 => CppSemanticTokenTypes::DependentName,
-            14 => CppSemanticTokenTypes::Namespace,
-            15 => CppSemanticTokenTypes::TemplateParameter,
-            16 => CppSemanticTokenTypes::Concept,
-            17 => CppSemanticTokenTypes::Primitive,
-            18 => CppSemanticTokenTypes::Macro,
-            19 => CppSemanticTokenTypes::InactiveCode,
-            _  => CppSemanticTokenTypes::Variable
+            0  => Self::Variable,
+            1  => Self::LocalVariable,
+            2  => Self::Parameter,
+            3  => Self::Function,
+            4  => Self::Method,
+            5  => Self::StaticMethod,
+            6  => Self::Field,
+            7  => Self::StaticField,
+            8  => Self::Class,
+            9  => Self::Enum,
+            10 => Self::EnumConstant,
+            11 => Self::Typedef,
+            12 => Self::DependentType,
+            13 => Self::DependentName,
+            14 => Self::Namespace,
+            15 => Self::TemplateParameter,
+            16 => Self::Concept,
+            17 => Self::Primitive,
+            18 => Self::Macro,
+            19 => Self::InactiveCode,
+            _  => Self::Unknown
         }
     }
 
-    pub fn to_semantic_token_type(cpp_token_type: CppSemanticTokenTypes) -> SemanticTokenTypes {
+    pub fn to_semantic_token_type(cpp_token_type: &Self) -> SemanticTokenTypes {
         match cpp_token_type {
-            CppSemanticTokenTypes::Variable          => SemanticTokenTypes::Variable, 
-            CppSemanticTokenTypes::LocalVariable     => SemanticTokenTypes::Variable,
-            CppSemanticTokenTypes::Parameter         => SemanticTokenTypes::None,
-            CppSemanticTokenTypes::Function          => SemanticTokenTypes::Function,
-            CppSemanticTokenTypes::Method            => SemanticTokenTypes::Method,
-            CppSemanticTokenTypes::StaticMethod      => SemanticTokenTypes::Function,
-            CppSemanticTokenTypes::Field             => SemanticTokenTypes::None,
-            CppSemanticTokenTypes::StaticField       => SemanticTokenTypes::None,
-            CppSemanticTokenTypes::Class             => SemanticTokenTypes::Class,
-            CppSemanticTokenTypes::Enum              => SemanticTokenTypes::Enum,
-            CppSemanticTokenTypes::EnumConstant      => SemanticTokenTypes::None,
-            CppSemanticTokenTypes::Typedef           => SemanticTokenTypes::None,
-            CppSemanticTokenTypes::DependentType     => SemanticTokenTypes::None,
-            CppSemanticTokenTypes::DependentName     => SemanticTokenTypes::None,
-            CppSemanticTokenTypes::Namespace         => SemanticTokenTypes::None,
-            CppSemanticTokenTypes::TemplateParameter => SemanticTokenTypes::None,
-            CppSemanticTokenTypes::Concept           => SemanticTokenTypes::None,
-            CppSemanticTokenTypes::Primitive         => SemanticTokenTypes::Primitive,
-            CppSemanticTokenTypes::Macro             => SemanticTokenTypes::Macro,
-            CppSemanticTokenTypes::InactiveCode      => SemanticTokenTypes::None
+            Self::Variable | Self::LocalVariable
+                                    => SemanticTokenTypes::Variable, 
+            Self::Function          => SemanticTokenTypes::Function,
+            Self::Method | Self::StaticMethod
+                                    => SemanticTokenTypes::Method,
+            Self::Class             => SemanticTokenTypes::Class,
+            Self::Enum              => SemanticTokenTypes::Enum,
+            Self::Primitive         => SemanticTokenTypes::Primitive,
+            Self::Macro             => SemanticTokenTypes::Macro,
+            Self::InactiveCode | Self::EnumConstant | Self::Typedef |      
+            Self::DependentType | Self::DependentName | Self::Namespace |        
+            Self::TemplateParameter | Self::Concept | Self::Field |            
+            Self::StaticField | Self::Parameter | Self::Unknown 
+                                    => SemanticTokenTypes::None        
         }
     }
 }
@@ -240,72 +235,63 @@ pub enum RustSemanticTokenTypes {
     Lifetime = 23,
     TypeAlias = 24,
     Union = 25,
-    UnresolvedReference = 26
+    UnresolvedReference = 26,
+    Unknown = 27
 }
 
 impl RustSemanticTokenTypes {
-    pub fn from_u32(uint: u32) -> RustSemanticTokenTypes {
+    pub fn from_u32(uint: u32) -> Self {
         match uint {
-            0  => RustSemanticTokenTypes::Comment,
-            1  => RustSemanticTokenTypes::Keyword,
-            2  => RustSemanticTokenTypes::String,
-            3  => RustSemanticTokenTypes::Number,
-            4  => RustSemanticTokenTypes::Regexp,
-            5  => RustSemanticTokenTypes::Operator,
-            6  => RustSemanticTokenTypes::Namespace,
-            7  => RustSemanticTokenTypes::Type,
-            8  => RustSemanticTokenTypes::Struct,
-            9  => RustSemanticTokenTypes::Class,
-            10 => RustSemanticTokenTypes::Interface,
-            11 => RustSemanticTokenTypes::Enum,
-            12 => RustSemanticTokenTypes::TypeParameter,
-            13 => RustSemanticTokenTypes::Function,
-            14 => RustSemanticTokenTypes::Member,
-            15 => RustSemanticTokenTypes::Property,
-            16 => RustSemanticTokenTypes::Macro,
-            17 => RustSemanticTokenTypes::Variable,
-            18 => RustSemanticTokenTypes::Parameter,
-            19 => RustSemanticTokenTypes::Label,
-            20 => RustSemanticTokenTypes::Attribute,
-            21 => RustSemanticTokenTypes::BuiltinType,
-            22 => RustSemanticTokenTypes::EnumMember,
-            23 => RustSemanticTokenTypes::Lifetime,
-            24 => RustSemanticTokenTypes::TypeAlias,
-            25 => RustSemanticTokenTypes::Union,
-            26 => RustSemanticTokenTypes::UnresolvedReference,
-            _  => RustSemanticTokenTypes::Variable
+            0  => Self::Comment,
+            1  => Self::Keyword,
+            2  => Self::String,
+            3  => Self::Number,
+            4  => Self::Regexp,
+            5  => Self::Operator,
+            6  => Self::Namespace,
+            7  => Self::Type,
+            8  => Self::Struct,
+            9  => Self::Class,
+            10 => Self::Interface,
+            11 => Self::Enum,
+            12 => Self::TypeParameter,
+            13 => Self::Function,
+            14 => Self::Member,
+            15 => Self::Property,
+            16 => Self::Macro,
+            17 => Self::Variable,
+            18 => Self::Parameter,
+            19 => Self::Label,
+            20 => Self::Attribute,
+            21 => Self::BuiltinType,
+            22 => Self::EnumMember,
+            23 => Self::Lifetime,
+            24 => Self::TypeAlias,
+            25 => Self::Union,
+            26 => Self::UnresolvedReference,
+            _  => Self::Unknown
         }
     }
 
-    pub fn to_semantic_token_type(rust_token_type: RustSemanticTokenTypes) -> SemanticTokenTypes {
+    pub fn to_semantic_token_type(rust_token_type: &Self) -> SemanticTokenTypes {
         match rust_token_type {
-            RustSemanticTokenTypes::Comment             => SemanticTokenTypes::Comment,
-            RustSemanticTokenTypes::Keyword             => SemanticTokenTypes::Keyword,
-            RustSemanticTokenTypes::String              => SemanticTokenTypes::Literal,
-            RustSemanticTokenTypes::Number              => SemanticTokenTypes::Literal,
-            RustSemanticTokenTypes::Regexp              => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::Operator            => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::Namespace           => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::Type                => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::Struct              => SemanticTokenTypes::Class,
-            RustSemanticTokenTypes::Class               => SemanticTokenTypes::Class,
-            RustSemanticTokenTypes::Interface           => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::Enum                => SemanticTokenTypes::Enum,
-            RustSemanticTokenTypes::TypeParameter       => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::Function            => SemanticTokenTypes::Function,
-            RustSemanticTokenTypes::Member              => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::Property            => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::Macro               => SemanticTokenTypes::Macro,
-            RustSemanticTokenTypes::Variable            => SemanticTokenTypes::Variable,
-            RustSemanticTokenTypes::Parameter           => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::Label               => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::Attribute           => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::BuiltinType         => SemanticTokenTypes::Primitive,
-            RustSemanticTokenTypes::EnumMember          => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::Lifetime            => SemanticTokenTypes::Literal,
-            RustSemanticTokenTypes::TypeAlias           => SemanticTokenTypes::Class,
-            RustSemanticTokenTypes::Union               => SemanticTokenTypes::None,
-            RustSemanticTokenTypes::UnresolvedReference => SemanticTokenTypes::None
+            Self::Comment             => SemanticTokenTypes::Comment,
+            Self::Keyword             => SemanticTokenTypes::Keyword,
+            Self::String | Self::Number | Self::Lifetime            
+                                      => SemanticTokenTypes::Literal,
+            Self::Struct | Self::Class | Self::TypeAlias
+                                      => SemanticTokenTypes::Class,
+            Self::Enum                => SemanticTokenTypes::Enum,
+            Self::Function            => SemanticTokenTypes::Function,
+            Self::Macro               => SemanticTokenTypes::Macro,
+            Self::Variable            => SemanticTokenTypes::Variable,
+            Self::BuiltinType         => SemanticTokenTypes::Primitive,
+            Self::Interface | Self::TypeParameter | Self::Member |  
+            Self::Property | Self::Parameter | Self::Label |
+            Self::Attribute | Self::EnumMember | Self::Regexp |             
+            Self::Operator | Self::Namespace | Self::Type |               
+            Self::Union | Self::UnresolvedReference | Self::Unknown 
+                                      => SemanticTokenTypes::None
         }
     }
 }
@@ -322,24 +308,25 @@ pub enum RustSemanticTokenModifiers {
     Constant = 7,
     Mutable = 8,
     Unsafe = 9,
-    ControlFlow = 10
+    ControlFlow = 10,
+    Unknown = 11
 }
 
 impl RustSemanticTokenModifiers {
-    pub fn from_u32(uint: u32) -> RustSemanticTokenModifiers {
+    pub fn from_u32(uint: u32) -> Self {
         match uint {
-            0  => RustSemanticTokenModifiers::Documentation,
-            1  => RustSemanticTokenModifiers::Declaration,
-            2  => RustSemanticTokenModifiers::Definition,
-            3  => RustSemanticTokenModifiers::Static,
-            4  => RustSemanticTokenModifiers::Abstract,
-            5  => RustSemanticTokenModifiers::Deprecated,
-            6  => RustSemanticTokenModifiers::Readonly,
-            7  => RustSemanticTokenModifiers::Constant,
-            8  => RustSemanticTokenModifiers::Mutable,
-            9  => RustSemanticTokenModifiers::Unsafe,
-            10 => RustSemanticTokenModifiers::ControlFlow,
-            _  => RustSemanticTokenModifiers::Documentation
+            0  =>     Self::Documentation,
+            1  =>     Self::Declaration,
+            2  =>     Self::Definition,
+            3  =>     Self::Static,
+            4  =>     Self::Abstract,
+            5  =>     Self::Deprecated,
+            6  =>     Self::Readonly,
+            7  =>     Self::Constant,
+            8  =>     Self::Mutable,
+            9  =>     Self::Unsafe,
+            10 =>     Self::ControlFlow,
+            _ =>      Self::Unknown
         }
     }
 }
@@ -385,8 +372,8 @@ pub struct Position {
 }
 
 impl Position {
-    pub fn new(line: i64, character: i64) -> Position {
-        Position {
+    pub const fn new(line: i64, character: i64) -> Self {
+        Self {
             line,
             character
         }
@@ -423,8 +410,8 @@ pub struct DidOpenNotification {
 }
 
 impl DidOpenNotification {
-    pub fn new(uri: String, language_id: String, text: String) -> DidOpenNotification {
-        DidOpenNotification {
+    pub fn new(uri: String, language_id: String, text: String) -> Self {
+        Self {
             jsonrpc: "2.0".to_owned(),
             method: "textDocument/didOpen".to_owned(),
             params: DidOpenTextDocumentParams {
@@ -448,8 +435,8 @@ pub struct DidChangeNotification {
 }
 
 impl DidChangeNotification {
-    pub fn new(text_document: VersionedTextDocumentIdentifier, content_changes: Vec<TextDocumentContentChangeEvent>) -> DidChangeNotification {
-        DidChangeNotification {
+    pub fn new(text_document: VersionedTextDocumentIdentifier, content_changes: Vec<TextDocumentContentChangeEvent>) -> Self {
+        Self {
             jsonrpc: "2.0".to_owned(),
             method: "textDocument/didChange".to_owned(),
             params: DidChangeTextDocumentParams {
@@ -469,8 +456,8 @@ pub struct InitializeNotification {
 }
 
 impl InitializeNotification {
-    pub fn new() -> InitializeNotification {
-        InitializeNotification {
+    pub fn new() -> Self {
+        Self {
             jsonrpc: "2.0".to_owned(),
             method: "initialized".to_owned(),
             params: None
@@ -521,8 +508,8 @@ pub struct SemanticTokensRequest {
 }
 
 impl SemanticTokensRequest {
-    pub fn new(id: i64, uri: String) -> SemanticTokensRequest {
-        SemanticTokensRequest {
+    pub fn new(id: i64, uri: String) -> Self {
+        Self {
             jsonrpc: "2.0".to_owned(),
             id,
             method: "textDocument/semanticTokens".to_owned(),

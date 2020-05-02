@@ -8,6 +8,21 @@ use winapi::{
 
 const IDENTITY_MATRIX: D2D1_MATRIX_3X2_F = D2D1_MATRIX_3X2_F { matrix: [[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]] };
 
+const DEFAULT_TEXT_COLOR: D3DCOLORVALUE = create_color(0xFBF1C7FF);
+const DEFAULT_LINE_NUMBER_COLOR: D3DCOLORVALUE = create_color(0xD5C4A1FF);
+const DEFAULT_CARET_COLOR: D3DCOLORVALUE = create_color(0xFE8019FF);
+const DEFAULT_SELECTION_COLOR: D3DCOLORVALUE = create_color(0x0F52BAFF);
+const DEFAULT_VARIABLE_COLOR: D3DCOLORVALUE = create_color(0xADD8E6FF);
+const DEFAULT_FUNCTION_COLOR: D3DCOLORVALUE = create_color(0xFBD06DFF);
+const DEFAULT_METHOD_COLOR: D3DCOLORVALUE = create_color(0xD3869BFF);
+const DEFAULT_CLASS_COLOR: D3DCOLORVALUE = create_color(0xA0DB8EFF);
+const DEFAULT_ENUM_COLOR: D3DCOLORVALUE = create_color(0xA0DB8EFF);
+const DEFAULT_COMMENT_COLOR: D3DCOLORVALUE = create_color(0xB8BB26FF);
+const DEFAULT_KEYWORD_COLOR: D3DCOLORVALUE = create_color(0xFB4934FF);
+const DEFAULT_LITERAL_COLOR: D3DCOLORVALUE = create_color(0xFE8019FF);
+const DEFAULT_MACRO_PREPROCESSOR_COLOR: D3DCOLORVALUE = create_color(0xEE7AE9FF);
+const DEFAULT_PRIMITIVE_COLOR: D3DCOLORVALUE = create_color(0xCDF916FF);
+
 const fn create_color(color: u32) -> D3DCOLORVALUE {
     D3DCOLORVALUE {
         r: ((color >> 24) & 0xFF) as f32 / 255.0,
@@ -37,8 +52,8 @@ pub struct Theme {
 }
 
 impl Default for Theme {
-    fn default() -> Theme {
-        Theme {
+    fn default() -> Self {
+        Self {
             background_color: D3DCOLORVALUE { r: 0.0, g: 0.0, b: 0.0, a: 1.0},
             text_brush: null_mut(),
             line_number_brush: null_mut(),
@@ -59,8 +74,8 @@ impl Default for Theme {
 }
 
 impl Theme {
-    pub fn new_default(target: *mut ID2D1HwndRenderTarget) -> Theme {
-        let mut theme = Theme {
+    pub fn new_default(target: *mut ID2D1HwndRenderTarget) -> Self {
+        let mut theme = Self {
             background_color: create_color(0x282828FF),
             text_brush: null_mut(),
             line_number_brush: null_mut(),
@@ -83,36 +98,21 @@ impl Theme {
             transform: IDENTITY_MATRIX
         };
 
-        const TEXT_COLOR: D3DCOLORVALUE = create_color(0xFBF1C7FF);
-        const LINE_NUMBER_COLOR: D3DCOLORVALUE = create_color(0xD5C4A1FF);
-        const CARET_COLOR: D3DCOLORVALUE = create_color(0xFE8019FF);
-        const SELECTION_COLOR: D3DCOLORVALUE = create_color(0x0F52BAFF);
-        const VARIABLE_COLOR: D3DCOLORVALUE = create_color(0xADD8E6FF);
-        const FUNCTION_COLOR: D3DCOLORVALUE = create_color(0xFBD06DFF);
-        const METHOD_COLOR: D3DCOLORVALUE = create_color(0xD3869BFF);
-        const CLASS_COLOR: D3DCOLORVALUE = create_color(0xA0DB8EFF);
-        const ENUM_COLOR: D3DCOLORVALUE = create_color(0xA0DB8EFF);
-        const COMMENT_COLOR: D3DCOLORVALUE = create_color(0xB8BB26FF);
-        const KEYWORD_COLOR: D3DCOLORVALUE = create_color(0xFB4934FF);
-        const LITERAL_COLOR: D3DCOLORVALUE = create_color(0xFE8019FF);
-        const MACRO_PREPROCESSOR_COLOR: D3DCOLORVALUE = create_color(0xEE7AE9FF);
-        const PRIMITIVE_COLOR: D3DCOLORVALUE = create_color(0xCDF916FF);
-
         unsafe {
-            dx_ok!((*target).CreateSolidColorBrush(&TEXT_COLOR, &brush_properties, &mut theme.text_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&LINE_NUMBER_COLOR, &brush_properties, &mut theme.line_number_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&CARET_COLOR, &brush_properties, &mut theme.caret_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&SELECTION_COLOR, &brush_properties, &mut theme.selection_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&VARIABLE_COLOR, &brush_properties, &mut theme.variable_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&FUNCTION_COLOR, &brush_properties, &mut theme.function_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&METHOD_COLOR, &brush_properties, &mut theme.method_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&CLASS_COLOR, &brush_properties, &mut theme.class_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&ENUM_COLOR, &brush_properties, &mut theme.enum_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&COMMENT_COLOR, &brush_properties, &mut theme.comment_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&KEYWORD_COLOR, &brush_properties, &mut theme.keyword_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&LITERAL_COLOR, &brush_properties, &mut theme.literal_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&MACRO_PREPROCESSOR_COLOR, &brush_properties, &mut theme.macro_preprocessor_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&PRIMITIVE_COLOR, &brush_properties, &mut theme.primitive_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_TEXT_COLOR, &brush_properties, &mut theme.text_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_LINE_NUMBER_COLOR, &brush_properties, &mut theme.line_number_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_CARET_COLOR, &brush_properties, &mut theme.caret_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_SELECTION_COLOR, &brush_properties, &mut theme.selection_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_VARIABLE_COLOR, &brush_properties, &mut theme.variable_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_FUNCTION_COLOR, &brush_properties, &mut theme.function_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_METHOD_COLOR, &brush_properties, &mut theme.method_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_CLASS_COLOR, &brush_properties, &mut theme.class_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_ENUM_COLOR, &brush_properties, &mut theme.enum_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_COMMENT_COLOR, &brush_properties, &mut theme.comment_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_KEYWORD_COLOR, &brush_properties, &mut theme.keyword_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_LITERAL_COLOR, &brush_properties, &mut theme.literal_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_MACRO_PREPROCESSOR_COLOR, &brush_properties, &mut theme.macro_preprocessor_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_PRIMITIVE_COLOR, &brush_properties, &mut theme.primitive_brush as *mut *mut _));
         }
 
         theme
