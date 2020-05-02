@@ -243,7 +243,6 @@ impl TextBuffer {
         }
     }
 
-
     fn is_linebreak(chr: char) -> bool {
         chr == '\n' || chr == '\r' || chr == '\u{000B}' || chr == '\u{000C}' || 
         chr == '\u{0085}' || chr == '\u{2028}' || chr == '\u{2029}'
@@ -532,25 +531,12 @@ impl TextBuffer {
     pub fn insert_chars(&mut self, chars: &str) -> DidChangeNotification {
         let mut changes = Vec::new();
 
-        // let mut caret_absolute_pos = self.get_caret_absolute_pos();
-        // // If we are currently selecting text, 
-        // // delete text before insertion
-        // if self.get_caret_absolute_pos() != self.caret_char_anchor {
-        //     changes.push(self.delete_selection());
-        //     caret_absolute_pos = self.get_caret_absolute_pos();
-        // }
-
-        let caret_absolute_pos = 
+        // If we are currently selecting text, 
+        // delete text before insertion
         if self.get_caret_absolute_pos() != self.caret_char_anchor {
-            // If we are currently selecting text, 
-            // delete text before insertion
             changes.push(self.delete_selection());
-            self.get_caret_absolute_pos()
         }
-        else {
-            self.get_caret_absolute_pos()
-        };
-
+        let caret_absolute_pos = self.get_caret_absolute_pos();
         let line = self.buffer.char_to_line(caret_absolute_pos);
         let character_position_in_line = caret_absolute_pos - self.buffer.line_to_char(line);
 
@@ -566,9 +552,7 @@ impl TextBuffer {
 
         self.buffer.insert(caret_absolute_pos, chars);
         self.set_selection(SelectionMode::Right, chars.len(), false);
-
         self.update_absolute_char_positions();
-        self.update_text_column_offset();
         
         // Update the file version and return the change notification
         self.lsp_versioned_identifier.version += 1;
@@ -587,33 +571,18 @@ impl TextBuffer {
     pub fn insert_char(&mut self, character: u16) -> DidChangeNotification {
         let mut changes = Vec::new();
 
-        // let mut caret_absolute_pos = self.get_caret_absolute_pos();
-        // // If we are currently selecting text, 
-        // // delete text before insertion
-        // if self.get_caret_absolute_pos() != self.caret_char_anchor {
-        //     changes.push(self.delete_selection());
-        //     caret_absolute_pos = self.get_caret_absolute_pos();
-        // }
-
-        let caret_absolute_pos = 
+        // If we are currently selecting text, 
+        // delete text before insertion
         if self.get_caret_absolute_pos() != self.caret_char_anchor {
-            // If we are currently selecting text, 
-            // delete text before insertion
             changes.push(self.delete_selection());
-            self.get_caret_absolute_pos()
         }
-        else {
-            self.get_caret_absolute_pos()
-        };
-
+        let caret_absolute_pos = self.get_caret_absolute_pos();
         let line = self.buffer.char_to_line(caret_absolute_pos);
         let character_position_in_line = caret_absolute_pos - self.buffer.line_to_char(line);
 
         self.buffer.insert_char(caret_absolute_pos, (character as u8) as char);
         self.set_selection(SelectionMode::Right, 1, false);
-
         self.update_absolute_char_positions();
-        self.update_text_column_offset();
 
         // Update the file version and return the change notification
         self.lsp_versioned_identifier.version += 1;
@@ -810,7 +779,7 @@ impl TextBuffer {
             return DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![self.delete_selection()]);
         }
 
-        // Start by moving left atleast once, then get the boundary count
+        // Start by moving left once, then get the boundary count
         self.set_selection(SelectionMode::Left, 1, true);
         let count = self.get_boundary_char_count(CharSearchDirection::Backward);
         self.set_selection(SelectionMode::Left, count, true);
@@ -952,16 +921,6 @@ impl TextBuffer {
             // If nothing is selected, copy current line
             _ => self.buffer.line(self.buffer.char_to_line(caret_absolute_pos)).to_string()
         }
-
-        // if self.caret_char_anchor > caret_absolute_pos {
-        //     self.buffer.slice(caret_absolute_pos..min(self.caret_char_anchor, self.buffer.len_chars() - 1)).to_string()
-        // }
-        // else if self.caret_char_anchor < caret_absolute_pos {
-        //     self.buffer.slice(self.caret_char_anchor..min(caret_absolute_pos, self.buffer.len_chars() - 1)).to_string()
-        // }
-        // else {
-        //     self.buffer.line(self.buffer.char_to_line(caret_absolute_pos)).to_string()
-        // }
     }
 
     pub fn copy_selection(&mut self, hwnd: HWND) {
