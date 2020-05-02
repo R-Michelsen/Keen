@@ -10,7 +10,7 @@ use core::ops::RangeBounds;
 use std::{
     cell::RefCell,
     char,
-    cmp::{ min, max },
+    cmp::{min, max},
     ffi::OsStr,
     fs::File,
     iter::once,
@@ -23,10 +23,10 @@ use std::{
 use winapi::{
     ctypes::c_void,
     um::{
-        dwrite::{ IDWriteTextLayout, DWRITE_HIT_TEST_METRICS, DWRITE_TEXT_RANGE },
-        d2d1::{ D2D1_RECT_F, D2D1_LAYER_PARAMETERS },
-        winbase::{ GlobalAlloc, GlobalFree, GlobalLock, GlobalUnlock, GlobalSize, GMEM_DDESHARE, GMEM_ZEROINIT},
-        winuser::{ SystemParametersInfoW, SPI_GETCARETWIDTH, OpenClipboard, CloseClipboard,
+        dwrite::{IDWriteTextLayout, DWRITE_HIT_TEST_METRICS, DWRITE_TEXT_RANGE},
+        d2d1::{D2D1_RECT_F, D2D1_LAYER_PARAMETERS},
+        winbase::{GlobalAlloc, GlobalFree, GlobalLock, GlobalUnlock, GlobalSize, GMEM_DDESHARE, GMEM_ZEROINIT},
+        winuser::{SystemParametersInfoW, SPI_GETCARETWIDTH, OpenClipboard, CloseClipboard,
             EmptyClipboard, GetClipboardData, SetClipboardData, CF_TEXT}
     },
     shared::windef::HWND
@@ -167,7 +167,7 @@ impl TextBuffer {
 
             lsp_versioned_identifier: VersionedTextDocumentIdentifier {
                 uri: "file:///".to_owned() + path,
-                version: 0
+                version: 1
             },
             semantic_tokens: Vec::new(),
             semantic_tokens_edits: Vec::new()
@@ -1094,6 +1094,15 @@ impl TextBuffer {
         (self.line_numbers_layout, self.line_numbers_layer_params)
     }
 
+    pub fn on_font_change(&mut self) {
+        self.update_line_numbers_margin();
+        self.update_text_region();
+        self.update_numbers_region();
+        self.update_text_visible_line_count();
+        self.update_text_column_offset();
+        self.update_absolute_char_positions();
+    }
+
     pub fn update_metrics(&mut self, origin: (f32, f32), extents: (f32, f32)) {
         self.origin = origin;
         self.extents = extents;
@@ -1165,6 +1174,7 @@ impl TextBuffer {
         if  line_count < (self.top_line + 1) {
             self.top_line = line_count - 1;
         }
+
         self.bot_line = self.top_line + (self.text_visible_line_count - 1);
         self.absolute_char_pos_start = self.buffer.line_to_char(self.top_line);
         if self.bot_line >= self.buffer.len_lines() {

@@ -3,15 +3,16 @@ use crate::dx_ok;
 use std::ptr::null_mut;
 use winapi::{
     shared::d3d9types::D3DCOLORVALUE,
-    um::d2d1::{ ID2D1SolidColorBrush, ID2D1HwndRenderTarget, D2D1_BRUSH_PROPERTIES, D2D1_MATRIX_3X2_F }
+    um::d2d1::{ID2D1SolidColorBrush, ID2D1HwndRenderTarget, D2D1_BRUSH_PROPERTIES, D2D1_MATRIX_3X2_F}
 };
 
 const IDENTITY_MATRIX: D2D1_MATRIX_3X2_F = D2D1_MATRIX_3X2_F { matrix: [[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]] };
 
+const DEFAULT_BACKGROUND_COLOR: D3DCOLORVALUE = create_color(0x282828FF);
 const DEFAULT_TEXT_COLOR: D3DCOLORVALUE = create_color(0xFBF1C7FF);
 const DEFAULT_LINE_NUMBER_COLOR: D3DCOLORVALUE = create_color(0xD5C4A1FF);
 const DEFAULT_CARET_COLOR: D3DCOLORVALUE = create_color(0xFE8019FF);
-const DEFAULT_SELECTION_COLOR: D3DCOLORVALUE = create_color(0x0F52BAFF);
+const DEFAULT_SELECTION_COLOR: D3DCOLORVALUE = create_color(0x464646FF);
 const DEFAULT_VARIABLE_COLOR: D3DCOLORVALUE = create_color(0xADD8E6FF);
 const DEFAULT_FUNCTION_COLOR: D3DCOLORVALUE = create_color(0xFBD06DFF);
 const DEFAULT_METHOD_COLOR: D3DCOLORVALUE = create_color(0xD3869BFF);
@@ -76,7 +77,7 @@ impl Default for Theme {
 impl Theme {
     pub fn new_default(target: *mut ID2D1HwndRenderTarget) -> Self {
         let mut theme = Self {
-            background_color: create_color(0x282828FF),
+            background_color: DEFAULT_BACKGROUND_COLOR,
             text_brush: null_mut(),
             line_number_brush: null_mut(),
             caret_brush: null_mut(),

@@ -55,46 +55,63 @@ impl LSPClient {
                         let layout = Layout::from_size_align(MAX_LSP_RESPONSE_SIZE, 8).unwrap();
                         let allocation = alloc(layout);
 
-                        let header_size = 64;
+                        // For now we assume that all message received from the language servers
+                        // are over 32 bytes long (including the Content-Length part)
+                        let header_size = 32;
                         let header: &mut [u8] = core::slice::from_raw_parts_mut(allocation, header_size);
 
                         let mut content_length_bytes = 0;
                         let mut content_length = 0;
-                        let mut remaining_length = 0;
-                        if let Ok(()) = stdout.read_exact(header) {
-                            if header.starts_with(b"Content-Length: ") {
-                                // Parse the header to get the length of the content following
-                                // The header ends when the second "\r\n" is encountered
-                                let mut number_string = String::new();
-                                let mut crlf_count = 0;
-                                for chr in header.iter() {
-                                    if (*chr as char).is_ascii_digit() {
-                                        number_string.push(*chr as char);
-                                    }
-                                    if (*chr as char) == '\r' {
-                                        content_length = number_string.as_str().parse::<usize>().unwrap();
-                                        crlf_count += 1;
-                                        if crlf_count == 2 {
-                                            content_length_bytes += 2;
-                                            break;
+                        let remaining_length;
+                        match stdout.read_exact(header) {
+                            Ok(()) => {
+                                if header.starts_with(b"Content-Length: ") {
+                                    // Parse the header to get the length of the content following
+                                    // The header ends when the second "\r\n" is encountered
+                                    let mut number_string = String::new();
+                                    let mut crlf_count = 0;
+                                    for chr in header.iter() {
+                                        if (*chr as char).is_ascii_digit() {
+                                            number_string.push(*chr as char);
                                         }
+                                        if (*chr as char) == '\r' {
+                                            content_length = number_string.as_str().parse::<usize>().unwrap();
+                                            crlf_count += 1;
+                                            if crlf_count == 2 {
+                                                content_length_bytes += 2;
+                                                break;
+                                            }
+                                        }
+                                        content_length_bytes += 1;
                                     }
-                                    content_length_bytes += 1;
+    
+                                    remaining_length = content_length - (header_size - content_length_bytes);
                                 }
-                                remaining_length = content_length - (header_size - content_length_bytes);
-                            }
-                            else {
-                                // If stdout read fails, send LSP crash message
-                                // with the client string and length as params
+                                else {
+                                    // If stdout read_exact fails, send LSP crash message
+                                    // with the client string and length as params
+                                    SendMessageW(hwnd_clone as HWND, WM_LSP_CRASH, (client_name.as_ptr()) as usize, client_name.len() as isize);
+                                    return;
+                                }
+    
+                                let content: &mut [u8] = core::slice::from_raw_parts_mut(allocation.add(header_size), remaining_length);
+                                match stdout.read_exact(content) {
+                                    Ok(()) => {
+                                        let range = (content_length_bytes as i32, content_length as i32);
+                                        SendMessageW(hwnd_clone as HWND, WM_LSP_RESPONSE, allocation as usize, std::mem::transmute::<(i32, i32), isize>(range));
+                                    },
+                                    Err(e) => {
+                                        println!("Could not read content part of language server message {:?}", e);
+                                        SendMessageW(hwnd_clone as HWND, WM_LSP_CRASH, (client_name.as_ptr()) as usize, client_name.len() as isize);
+                                        return;
+                                    }
+                                }
+                            },
+                            Err(e) => {
+                                println!("Could not read header part of language server message {:?}", e);
                                 SendMessageW(hwnd_clone as HWND, WM_LSP_CRASH, (client_name.as_ptr()) as usize, client_name.len() as isize); 
                                 return;
                             }
-                        }
-
-                        let content: &mut [u8] = core::slice::from_raw_parts_mut(allocation.add(header_size), remaining_length);
-                        if let Ok(()) = stdout.read_exact(content) {
-                            let range = (content_length_bytes as i32, content_length as i32);
-                            SendMessageW(hwnd_clone as HWND, WM_LSP_RESPONSE, allocation as usize, std::mem::transmute::<(i32, i32), isize>(range));
                         }
                     }
                 }
@@ -126,8 +143,8 @@ impl LSPClient {
 
     pub fn send_initialized_notification(&mut self) {
         let init_notification = InitializeNotification::new();
-
         let serialized_init_notification = serde_json::to_string(&init_notification).unwrap();
+
         self.send_notification(serialized_init_notification.as_str());
     }
     
@@ -169,8 +186,8 @@ impl LSPClient {
                     name: "Keen".to_owned(),
                     version: None,
                 },
-                root_path: None,
-                root_uri: None,
+                root_path: Some("C:/Users/Rasmus/Desktop/Keen".to_owned()),
+                root_uri: Some("C:/Users/Rasmus/Desktop/Keen".to_owned()),
 
                 initialization_options,
 

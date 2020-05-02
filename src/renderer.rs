@@ -40,9 +40,7 @@ use winapi::{
     },
     shared::{
         dxgiformat::DXGI_FORMAT_UNKNOWN,
-        windef::{
-            RECT, HWND
-        }
+        windef::{RECT, HWND}
     }
 };
 
@@ -70,6 +68,8 @@ pub struct TextRenderer {
     pub font_size: f32,
     pub font_height: f32,
     pub font_width: f32,
+    font_name: Vec<u16>,
+    font_locale: Vec<u16>,
 
     theme: Theme,
 
@@ -81,7 +81,7 @@ pub struct TextRenderer {
 }
 
 impl TextRenderer {
-    pub fn new(hwnd: HWND, font: &str, mut font_size: f32) -> Self {
+    pub fn new(hwnd: HWND, font: &str, font_size: f32) -> Self {
         let mut renderer = Self {
             dpi_scale: 0.0,
             pixel_size: D2D1_SIZE_U {
@@ -91,6 +91,8 @@ impl TextRenderer {
             font_size,
             font_height: 0.0,
             font_width: 0.0,
+            font_name: Vec::new(),
+            font_locale: Vec::new(),
 
             theme: Theme::default(),
                 
@@ -114,7 +116,7 @@ impl TextRenderer {
             renderer.dpi_scale = dpi as f32 / 96.0;
 
             // Scale the font size to fit the dpi
-            font_size *= renderer.dpi_scale;
+            renderer.font_size *= renderer.dpi_scale;
 
             let mut rect_uninit = MaybeUninit::<RECT>::uninit();
             GetClientRect(hwnd, rect_uninit.as_mut_ptr());
@@ -154,25 +156,10 @@ impl TextRenderer {
                 )
             );
 
-            let font_name: Vec<u16> = OsStr::new(font).encode_wide().chain(once(0)).collect();
-            let locale: Vec<u16> = OsStr::new("en-us").encode_wide().chain(once(0)).collect();
-
-            dx_ok!((*renderer.write_factory).CreateTextFormat(
-                    font_name.as_ptr(),
-                    null_mut(),
-                    DWRITE_FONT_WEIGHT_NORMAL,
-                    DWRITE_FONT_STYLE_NORMAL,
-                    DWRITE_FONT_STRETCH_NORMAL,
-                    font_size,
-                    locale.as_ptr(),
-                    &mut renderer.text_format as *mut *mut _
-            ));
-
-            renderer.update_font_metrics();
-
-            dx_ok!((*renderer.text_format).SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING));
-            dx_ok!((*renderer.text_format).SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR));
-            dx_ok!((*renderer.text_format).SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP));
+            renderer.font_name = OsStr::new(font).encode_wide().chain(once(0)).collect();
+            renderer.font_locale = OsStr::new("en-us").encode_wide().chain(once(0)).collect();
+            
+            renderer.update_text_format(0.0);
         }
 
         renderer
@@ -193,6 +180,35 @@ impl TextRenderer {
             opacityBrush: null_mut(),
             layerOptions: D2D1_LAYER_OPTIONS_INITIALIZE_FOR_CLEARTYPE
         }
+    }
+
+    pub fn update_text_format(&mut self, font_size_delta: f32) {
+        if (self.font_size + font_size_delta) > 0.0 {
+            self.font_size += font_size_delta;
+        }
+
+        unsafe {
+            // Release the old text format
+            if !self.text_format.is_null() {
+                (*self.text_format).Release();
+            }
+
+            dx_ok!((*self.write_factory).CreateTextFormat(
+                self.font_name.as_ptr(),
+                null_mut(),
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                self.font_size,
+                self.font_locale.as_ptr(),
+                &mut self.text_format as *mut *mut _
+            ));
+            dx_ok!((*self.text_format).SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING));
+            dx_ok!((*self.text_format).SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR));
+            dx_ok!((*self.text_format).SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP));
+        }
+
+        self.update_font_metrics();
     }
 
     fn update_font_metrics(&mut self) {

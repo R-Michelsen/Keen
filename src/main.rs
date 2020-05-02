@@ -47,7 +47,8 @@ use winapi::{
             WM_CREATE, CREATESTRUCTW, GWLP_USERDATA, 
             WM_MOUSEMOVE, WM_NCDESTROY, SW_SHOW, WM_LBUTTONDBLCLK,
             WS_OVERLAPPEDWINDOW, CS_HREDRAW, CS_VREDRAW, CS_DBLCLKS,
-            WNDCLASSW, PAINTSTRUCT, InvalidateRect, DestroyWindow
+            WNDCLASSW, PAINTSTRUCT, InvalidateRect, DestroyWindow,
+            SIZE_MINIMIZED
         },
         errhandlingapi::GetLastError,
         wingdi::{GetStockObject, BLACK_BRUSH}
@@ -85,7 +86,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, (*uninit_editor).as_mut_ptr() as isize);
         editor = (*uninit_editor).as_mut_ptr();
         // (*editor).open_file("C:/Users/Rasmus/Desktop/Yarr/source/AppEditorLogic.cpp");
-        (*editor).open_file("C:/Users/Rasmus/Desktop/keen/src/editor.rs");
+        (*editor).open_file("C:/Users/Rasmus/Desktop/Keen/src/editor.rs");
     }
     else {
         editor = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Editor;
@@ -135,6 +136,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             0
         }
         WM_SIZE => {
+            // If the window is being minimized just return
+            if wparam == SIZE_MINIMIZED {
+                return 0;
+            }
             let width = LOWORD(lparam as u32);
             let height = HIWORD(lparam as u32);
             (*editor).resize(width.into(), height.into());
@@ -153,10 +158,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         },
         WM_MOUSEWHEEL => {
             if GET_WHEEL_DELTA_WPARAM(wparam) > 0 {
-                (*editor).execute_command(&EditorCommand::ScrollUp);
+                (*editor).execute_command(&EditorCommand::ScrollUp(ctrl_down));
             }
             else {
-                (*editor).execute_command(&EditorCommand::ScrollDown);
+                (*editor).execute_command(&EditorCommand::ScrollDown(ctrl_down));
             }
             InvalidateRect(hwnd, null_mut(), false as i32);
             0

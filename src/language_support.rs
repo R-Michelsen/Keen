@@ -21,8 +21,8 @@ pub const CPP_LANGUAGE_IDENTIFIER: &str = "cpp";
 pub const RUST_KEYWORDS: [&str; 38] = ["as", "break", "const", "continue", "crate", 
 "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", 
 "match", "mod", "move", "mut", "pub", "ref", "return", "self", "Self",  "static", 
-"struct", "super", "trait", "true", "type", "unsafe", "use", "where", "while", "async", 
-"await", "dyn"];
+"struct", "super", "trait", "true", "type", "unsafe", "use", "where", "while", 
+"async", "await", "dyn"];
 pub const RUST_FILE_EXTENSIONS: [&str; 1] = ["rs"];
 pub const RUST_LSP_SERVER: &str = "rust-analyzer";
 pub const RUST_LANGUAGE_IDENTIFIER: &str = "rust";

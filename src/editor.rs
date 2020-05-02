@@ -6,16 +6,17 @@ use std::{
     path::Path
 };
 use winapi::shared::windef::HWND;
-use winapi::um::winuser::{ VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_TAB, VK_RETURN, VK_DELETE, VK_BACK};
+use winapi::um::winuser::{VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_TAB, VK_RETURN, VK_DELETE, VK_BACK};
 
-use crate::settings::{SCROLL_LINES_PER_MOUSEMOVE, SCROLL_LINES_PER_ROLL, NUMBER_OF_SPACES_PER_TAB};
+use crate::settings::{SCROLL_LINES_PER_MOUSEMOVE, SCROLL_LINES_PER_ROLL, 
+    NUMBER_OF_SPACES_PER_TAB, SCROLL_ZOOM_FACTOR};
 use crate::renderer::TextRenderer;
 use crate::lsp_client::{LSPClient, LSPRequestType};
 use crate::lsp_structs::{SemanticTokenResult, GenericNotification, GenericRequest, 
     GenericResponse, DidChangeNotification, ResponseError, ErrorCodes};
 use crate::language_support::{CPP_FILE_EXTENSIONS, CPP_LSP_SERVER, CPP_LANGUAGE_IDENTIFIER, 
     RUST_LSP_SERVER, RUST_FILE_EXTENSIONS, RUST_LANGUAGE_IDENTIFIER};
-use crate::buffer::{ TextBuffer, SelectionMode, MouseSelectionMode };
+use crate::buffer::{TextBuffer, SelectionMode, MouseSelectionMode};
 
 type MousePos = (f32, f32);
 type ShiftDown = bool;
@@ -25,8 +26,8 @@ type CtrlDown = bool;
 pub enum EditorCommand {
     CaretVisible,
     CaretInvisible,
-    ScrollUp,
-    ScrollDown,
+    ScrollUp(CtrlDown),
+    ScrollDown(CtrlDown),
     LeftClick(MousePos, ShiftDown),
     LeftDoubleClick(MousePos),
     LeftRelease,
@@ -220,7 +221,7 @@ impl Editor {
                 // Spec says result is guaranteed to be Some(), when there is no error
                 // rust-analyzer doesn't seem to honor this so we have to check it
                 else if let Some(response_result) = response.result {
-                        self.handle_response_success(request_type, response_result);
+                    self.handle_response_success(request_type, response_result);
                 }
             }
         }
@@ -257,11 +258,23 @@ impl Editor {
                 },
                 EditorCommand::CaretVisible => self.caret_is_visible = true,
                 EditorCommand::CaretInvisible => self.caret_is_visible = false,
-                EditorCommand::ScrollUp => {
-                    buffer.scroll_up(SCROLL_LINES_PER_ROLL);
+                EditorCommand::ScrollUp(ctrl_down) => {
+                    match ctrl_down {
+                        true => {
+                            self.renderer.borrow_mut().update_text_format(SCROLL_ZOOM_FACTOR);
+                            buffer.on_font_change();
+                        },
+                        false => buffer.scroll_up(SCROLL_LINES_PER_ROLL)
+                    }
                 },
-                EditorCommand::ScrollDown => { 
-                    buffer.scroll_down(SCROLL_LINES_PER_ROLL);
+                EditorCommand::ScrollDown(ctrl_down) => {
+                    match ctrl_down {
+                        true => {
+                            self.renderer.borrow_mut().update_text_format(-SCROLL_ZOOM_FACTOR);
+                            buffer.on_font_change();
+                        },
+                        false => buffer.scroll_down(SCROLL_LINES_PER_ROLL)
+                    }
                 },
                 EditorCommand::LeftClick(mouse_pos, shift_down) => {
                     buffer.left_click(mouse_pos, shift_down);
