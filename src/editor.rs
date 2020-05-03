@@ -122,7 +122,7 @@ impl Editor {
     pub fn resize(&mut self, width: u32, height: u32) {
         self.renderer.borrow_mut().resize(width, height);
         for buffer in self.buffers.values_mut() {
-            buffer.update_metrics(
+            buffer.on_window_resize(
                 (0.0, 0.0), 
                 (self.renderer.borrow().pixel_size.width as f32, self.renderer.borrow().pixel_size.height as f32)
             );
@@ -266,6 +266,7 @@ impl Editor {
                         },
                         false => buffer.scroll_up(SCROLL_LINES_PER_ROLL)
                     }
+                    buffer.on_editor_action();
                 },
                 EditorCommand::ScrollDown(ctrl_down) => {
                     match ctrl_down {
@@ -275,13 +276,16 @@ impl Editor {
                         },
                         false => buffer.scroll_down(SCROLL_LINES_PER_ROLL)
                     }
+                    buffer.on_editor_action();
                 },
                 EditorCommand::LeftClick(mouse_pos, shift_down) => {
                     buffer.left_click(mouse_pos, shift_down);
+                    buffer.on_editor_action();
                     self.force_caret_visible();
                 },
                 EditorCommand::LeftDoubleClick(mouse_pos) => {
                     buffer.left_double_click(mouse_pos);
+                    buffer.on_editor_action();
                     self.force_caret_visible();
                 }
                 EditorCommand::LeftRelease => buffer.left_release(),
@@ -300,6 +304,7 @@ impl Editor {
                     }
 
                     buffer.set_mouse_selection(MouseSelectionMode::Move, mouse_pos);
+                    buffer.on_editor_action();
                 },
                 EditorCommand::KeyPressed(key, shift_down, ctrl_down) => { 
                     match (key, ctrl_down) {
@@ -313,11 +318,6 @@ impl Editor {
                             let did_change_notification = buffer.insert_chars(" ".repeat(NUMBER_OF_SPACES_PER_TAB).as_str());
                             if let Some(lsp_client) = self.lsp_client.as_mut() {
                                 Self::process_document_change(&did_change_notification, buffer, lsp_client);
-                            }
-                        },
-                        (VK_RETURN, true)  => {
-                            if let Some(lsp_client) = self.lsp_client.as_mut() {
-                                lsp_client.send_semantic_token_request(buffer.get_uri());
                             }
                         },
                         (VK_RETURN, false) => {
@@ -377,6 +377,7 @@ impl Editor {
                         }
                         _ => {}
                     }
+                    buffer.on_editor_action();
                     self.force_caret_visible();
                 }
                 EditorCommand::CharInsert(character) => {
@@ -384,6 +385,7 @@ impl Editor {
                     if let Some(lsp_client) = self.lsp_client.as_mut() {
                         Self::process_document_change(&did_change_notification, buffer, lsp_client);
                     }
+                    buffer.on_editor_action();
                     self.force_caret_visible();
                 }
                 EditorCommand::LSPClientCrash(client) => {

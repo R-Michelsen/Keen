@@ -1,6 +1,6 @@
 use crate::dx_ok;
 use crate::settings::NUMBER_OF_SPACES_PER_TAB;
-use crate::lsp_structs::{Range, Position, DidChangeNotification, TextDocumentContentChangeEvent, 
+use crate::lsp_structs::{DidChangeNotification, TextDocumentContentChangeEvent, 
                     VersionedTextDocumentIdentifier, SemanticTokenTypes, CppSemanticTokenTypes, 
                     RustSemanticTokenTypes, RustSemanticTokenModifiers};
 use crate::language_support::{CPP_LANGUAGE_IDENTIFIER, RUST_LANGUAGE_IDENTIFIER, highlight_text};
@@ -61,11 +61,6 @@ pub enum CharSearchDirection {
     Backward
 }
 
-struct TemporaryEdit {
-    pub add_line: bool,
-    pub line_num: usize
-}
-
 pub struct TextBuffer {
     buffer: Rope,
 
@@ -111,8 +106,7 @@ pub struct TextBuffer {
     renderer: Rc<RefCell<TextRenderer>>,
 
     lsp_versioned_identifier: VersionedTextDocumentIdentifier,
-    semantic_tokens: Vec<u32>,
-    semantic_tokens_edits: Vec<TemporaryEdit>
+    semantic_tokens: Vec<u32>
 }
 
 impl TextBuffer {
@@ -169,27 +163,24 @@ impl TextBuffer {
                 uri: "file:///".to_owned() + path,
                 version: 1
             },
-            semantic_tokens: Vec::new(),
-            semantic_tokens_edits: Vec::new()
+            semantic_tokens: Vec::new()
         };
 
-        text_buffer.update_metrics(origin, extents);
+        text_buffer.on_window_resize(origin, extents);
         text_buffer
     }
 
     pub fn get_full_did_change_notification(&mut self) -> DidChangeNotification {
         // Update the file version and return the change notification
-        self.lsp_versioned_identifier.version += 1;
         let change_event = TextDocumentContentChangeEvent {
             text: self.buffer.to_string(),
             range: None
         };
-        DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![change_event])
+        DidChangeNotification::new(self.next_versioned_identifer(), vec![change_event])
     }
 
     pub fn update_semantic_tokens(&mut self, data: Vec<u32>) {
         self.semantic_tokens = data;
-        self.semantic_tokens_edits.clear();
     }
 
     pub fn get_uri(&self) -> String {
@@ -208,7 +199,6 @@ impl TextBuffer {
         else {
             self.top_line = new_top;
         }
-        self.update_absolute_char_positions();
     }
 
     pub fn scroll_up(&mut self, lines_per_roll: usize) {
@@ -218,7 +208,6 @@ impl TextBuffer {
         else {
             self.top_line = 0;
         }
-        self.update_absolute_char_positions();
     }
 
     pub fn scroll_left(&mut self, lines_per_roll: usize) {
@@ -241,65 +230,6 @@ impl TextBuffer {
         else if line_length > max_columns_in_text_region{
             self.text_column_offset = new_offset;
         }
-    }
-
-    fn is_linebreak(chr: char) -> bool {
-        chr == '\n' || chr == '\r' || chr == '\u{000B}' || chr == '\u{000C}' || 
-        chr == '\u{0085}' || chr == '\u{2028}' || chr == '\u{2029}'
-    }
-
-    // Underscore is treated as part of a word to make movement
-    // programming in snake_case easier.
-    fn is_word(chr: char) -> bool {
-        chr.is_alphanumeric() || chr == '_'
-    }
-
-    fn get_char_type(chr: char) -> CharType {
-        match chr {
-            x if Self::is_word(x) => CharType::Word,
-            x if Self::is_linebreak(x) => CharType::Linebreak,
-            _ => CharType::Punctuation
-        }
-    }
-
-    // Finds the number of characters until a boundary
-    // A boundary is defined to be punctuation when the
-    // current char is inside a word, and alphanumeric otherwise
-    // bool specifies the direction to search in,
-    // true for right false for left
-    fn get_boundary_char_count(&self, search_direction: CharSearchDirection) -> usize {
-        let caret_absolute_pos = self.get_caret_absolute_pos();
-        let mut count = 0;
-
-        match search_direction {
-            CharSearchDirection::Forward => {
-                if caret_absolute_pos == self.buffer.len_chars() {
-                    return 0;
-                }
-                let current_char_type = Self::get_char_type(self.buffer.char(self.caret_char_pos));
-                for chr in self.buffer.chars_at(self.get_caret_absolute_pos()) {
-                    if Self::get_char_type(chr) != current_char_type {
-                        break;
-                    }
-                    count += 1;
-                }
-            },
-            CharSearchDirection::Backward => {
-                if caret_absolute_pos == 0 {
-                    return 0;
-                }
-                let current_char_type = Self::get_char_type(self.buffer.char(self.caret_char_pos));
-                let mut chars = self.buffer.chars_at(self.caret_char_pos);
-                while let Some(chr) = chars.prev() {
-                    if Self::get_char_type(chr) != current_char_type {
-                        break;
-                    }
-                    count += 1;
-                }
-            }
-        }
-
-        count
     }
 
     pub fn move_left(&mut self, shift_down: bool) {
@@ -351,19 +281,6 @@ impl TextBuffer {
 
     pub fn left_release(&mut self) {
         self.currently_selecting = false;
-    }
-
-    fn linebreaks_before_line(&self, line: usize) -> usize {
-        let mut line_start = self.buffer.chars_at(self.buffer.line_to_char(line));
-        match line_start.prev() {
-            Some('\n') => if line_start.prev() == Some('\r') { 2 } else { 1 }
-            // For completeness, we will count all linebreaks
-            // that ropey supports
-            Some('\u{000B}') | Some('\u{000C}') |
-            Some('\u{000D}') | Some('\u{0085}') |
-            Some('\u{2028}') | Some('\u{2029}') => 1,
-            _ => 0
-        }
     }
 
     pub fn set_selection(&mut self, mode: SelectionMode, count: usize, extend_current_selection: bool) {
@@ -434,8 +351,6 @@ impl TextBuffer {
         if !extend_current_selection {
             self.caret_char_anchor = self.get_caret_absolute_pos();
         }
-
-        self.update_text_column_offset();
     }
 
     pub fn set_mouse_selection(&mut self, mode: MouseSelectionMode, mouse_pos: (f32, f32)) {
@@ -474,7 +389,6 @@ impl TextBuffer {
         self.caret_char_anchor = 0;
         self.caret_is_trailing = 0;
         self.caret_char_pos = self.buffer.len_chars();
-        self.update_text_column_offset();
     }
 
     fn translate_mouse_pos_to_text_region(&self, mouse_pos: (f32, f32)) -> (f32, f32) {
@@ -487,44 +401,32 @@ impl TextBuffer {
 
     pub fn delete_selection(&mut self) -> TextDocumentContentChangeEvent {
         let caret_absolute_pos = self.get_caret_absolute_pos();
-        let line = self.buffer.char_to_line(caret_absolute_pos);
-        let character_position_in_line = caret_absolute_pos - self.buffer.line_to_char(line);
+        let current_line = self.buffer.char_to_line(caret_absolute_pos);
+        let current_char = caret_absolute_pos - self.buffer.line_to_char(current_line);
 
         let change_event = if caret_absolute_pos < self.caret_char_anchor {
             let end_line = self.buffer.char_to_line(self.caret_char_anchor);
-            let character_position_in_end_line = self.caret_char_anchor - self.buffer.line_to_char(end_line);
+            let end_char = self.caret_char_anchor - self.buffer.line_to_char(end_line);
             self.buffer.remove(caret_absolute_pos..self.caret_char_anchor);
 
             self.caret_char_pos = caret_absolute_pos;
             self.caret_char_anchor = self.caret_char_pos;
 
-            TextDocumentContentChangeEvent {
-                text: "".to_owned(),
-                range: Some(Range {
-                    start: Position::new(line as i64, character_position_in_line as i64),
-                    end: Position::new(end_line as i64, character_position_in_end_line as i64),
-                })
-            }
+            TextDocumentContentChangeEvent::new_delete_event(current_line, current_char, end_line, end_char)
         }
         else {
             let start_line = self.buffer.char_to_line(self.caret_char_anchor);
-            let character_position_in_start_line = self.caret_char_anchor - self.buffer.line_to_char(start_line);
+            let start_char = self.caret_char_anchor - self.buffer.line_to_char(start_line);
             self.buffer.remove(self.caret_char_anchor..caret_absolute_pos);
 
             let caret_anchor_delta = caret_absolute_pos - self.caret_char_anchor;
             self.caret_char_pos = caret_absolute_pos - caret_anchor_delta;
 
-            TextDocumentContentChangeEvent {
-                text: "".to_owned(),
-                range: Some(Range {
-                    start: Position::new(start_line as i64, character_position_in_start_line as i64),
-                    end: Position::new(line as i64, character_position_in_line as i64),
-                })
-            }
+            TextDocumentContentChangeEvent::new_delete_event(start_line, start_char, current_line, current_char)
         };
-        self.caret_is_trailing = 0;
-        self.update_absolute_char_positions();
 
+        self.preserve_semantic_line_highlights(current_line);
+        self.caret_is_trailing = 0;
         change_event
     }
 
@@ -538,34 +440,15 @@ impl TextBuffer {
         }
         let caret_absolute_pos = self.get_caret_absolute_pos();
         let line = self.buffer.char_to_line(caret_absolute_pos);
-        let character_position_in_line = caret_absolute_pos - self.buffer.line_to_char(line);
-
-        // Add the newline to the temporary edits to preserve
-        // semantic highlighting until new highlights are resolved
-        // by the language server
-        if chars == "\r\n" {
-            self.semantic_tokens_edits.push(TemporaryEdit {
-                add_line: true,
-                line_num: line + 1
-            })
-        }
+        let char_pos = caret_absolute_pos - self.buffer.line_to_char(line);
 
         self.buffer.insert(caret_absolute_pos, chars);
         self.set_selection(SelectionMode::Right, chars.len(), false);
-        self.update_absolute_char_positions();
-        
-        // Update the file version and return the change notification
-        self.lsp_versioned_identifier.version += 1;
-        let change_event = TextDocumentContentChangeEvent {
-            text: chars.to_owned(),
-            range: Some(Range {
-                start: Position::new(line as i64, character_position_in_line as i64),
-                end: Position::new(line as i64, character_position_in_line as i64),
-            })
-        };
+        self.preserve_semantic_line_highlights(line);
 
+        let change_event = TextDocumentContentChangeEvent::new_insert_event(chars.to_owned(), line, char_pos, line, char_pos);
         changes.push(change_event);
-        DidChangeNotification::new(self.lsp_versioned_identifier.clone(), changes)
+        DidChangeNotification::new(self.next_versioned_identifer(), changes)
     }
 
     pub fn insert_char(&mut self, character: u16) -> DidChangeNotification {
@@ -578,111 +461,49 @@ impl TextBuffer {
         }
         let caret_absolute_pos = self.get_caret_absolute_pos();
         let line = self.buffer.char_to_line(caret_absolute_pos);
-        let character_position_in_line = caret_absolute_pos - self.buffer.line_to_char(line);
+        let char_pos = caret_absolute_pos - self.buffer.line_to_char(line);
 
         self.buffer.insert_char(caret_absolute_pos, (character as u8) as char);
         self.set_selection(SelectionMode::Right, 1, false);
-        self.update_absolute_char_positions();
+        self.preserve_semantic_char_highlights(line, char_pos);
 
-        // Update the file version and return the change notification
-        self.lsp_versioned_identifier.version += 1;
-        let change_event = TextDocumentContentChangeEvent {
-            text: ((character as u8) as char).to_string(),
-            range: Some(Range {
-                start: Position::new(line as i64, character_position_in_line as i64),
-                end: Position::new(line as i64, character_position_in_line as i64),
-            })
-        };
+        let change_event = TextDocumentContentChangeEvent::new_insert_event(
+            ((character as u8) as char).to_string(), line, char_pos, line, char_pos);
 
         changes.push(change_event);
-        DidChangeNotification::new(self.lsp_versioned_identifier.clone(), changes)
-    }
-
-    fn see_chars(&mut self, string: &str) -> bool {
-        let mut rope_iterator = self.buffer.chars_at(self.get_caret_absolute_pos());
-        for chr in string.chars() {
-            match rope_iterator.next() {
-                Some(x) if x == chr => continue,
-                _ => return false,
-            }
-        }
-        true
-    }
-
-    fn see_prev_chars(&mut self, string: &str) -> bool {
-        let mut rope_iterator = self.buffer.chars_at(self.get_caret_absolute_pos());
-        for chr in string.chars().rev() {
-            match rope_iterator.prev() {
-                Some(x) if x == chr => continue,
-                _ => return false,
-            }
-        }
-        true
+        DidChangeNotification::new(self.next_versioned_identifer(), changes)
     }
 
     pub fn delete_right(&mut self) -> DidChangeNotification {
         let caret_absolute_pos = self.get_caret_absolute_pos();
         let line = self.buffer.char_to_line(caret_absolute_pos);
-        let character_position_in_line = caret_absolute_pos - self.buffer.line_to_char(line);
-        let len_lines = self.buffer.len_lines();
+        let char_pos = caret_absolute_pos - self.buffer.line_to_char(line);
 
         // If we are currently selecting text, 
         // simply delete the selected text
         if caret_absolute_pos != self.caret_char_anchor {
-            self.lsp_versioned_identifier.version += 1;
-            return DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![self.delete_selection()]);
+            return DidChangeNotification::new(self.next_versioned_identifer(), vec![self.delete_selection()]);
         }
 
         // In case of a CRLF, delete both characters
+        // In case of a <TAB>, delete the corresponding spaces
         let mut offset = 1;
-        if self.see_chars("\r\n") {
-            offset = 2;
+        if self.see_chars("\r\n") { 
+            offset = 2 
         }
-        // In case of a <TAB>, delete the corresponding
-        // number of spaces
-        else if self.see_chars(" ".repeat(NUMBER_OF_SPACES_PER_TAB).as_str()) {
+        else if self.see_prev_chars(" ".repeat(NUMBER_OF_SPACES_PER_TAB).as_str()) {
             offset = NUMBER_OF_SPACES_PER_TAB;
         }
-
-        // In case the next line is also empty, we'll effectively
-        // be deleting the next line instead of the current one
-        let double_crlf = self.see_chars("\r\n\r\n");
+        self.preserve_semantic_line_highlights(line);
 
         let next_char_pos = min(caret_absolute_pos + offset, self.buffer.len_chars());
         self.buffer.remove(caret_absolute_pos..next_char_pos);
-        self.update_absolute_char_positions();
 
         let new_line = self.buffer.char_to_line(next_char_pos);
-        let new_character_position_in_line = next_char_pos - self.buffer.line_to_char(new_line);
+        let new_char = next_char_pos - self.buffer.line_to_char(new_line);
         
-        // In case the line has changed,
-        // insert temporary edit to preserve semantic highlights
-        // until the LSP server resolves the edit
-        if len_lines > self.buffer.len_lines() {
-            if double_crlf {
-                self.semantic_tokens_edits.push(TemporaryEdit {
-                    add_line: false,
-                    line_num: line + 1
-                })
-            }
-            else {
-                self.semantic_tokens_edits.push(TemporaryEdit {
-                    add_line: false,
-                    line_num: line
-                })
-            }
-        }
-
-        // Update the file version and return the change event
-        self.lsp_versioned_identifier.version += 1;
-        let change_event = TextDocumentContentChangeEvent {
-            text: "".to_owned(),
-            range: Some(Range {
-                start: Position::new(line as i64, character_position_in_line as i64),
-                end: Position::new(new_line as i64, new_character_position_in_line as i64),
-            })
-        };
-        DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![change_event])
+        let change_event = TextDocumentContentChangeEvent::new_delete_event(line, char_pos, new_line, new_char);
+        DidChangeNotification::new(self.next_versioned_identifer(), vec![change_event])
     }
 
     pub fn delete_right_by_word(&mut self) -> DidChangeNotification {
@@ -691,82 +512,46 @@ impl TextBuffer {
         // If we are currently selecting text, 
         // simply delete the selected text
         if caret_absolute_pos != self.caret_char_anchor {
-            self.lsp_versioned_identifier.version += 1;
-            return DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![self.delete_selection()]);
+            return DidChangeNotification::new(self.next_versioned_identifer(), vec![self.delete_selection()]);
         }
 
         let count = self.get_boundary_char_count(CharSearchDirection::Forward);
         self.set_selection(SelectionMode::Right, count, true);
 
-        self.lsp_versioned_identifier.version += 1;
-        DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![self.delete_selection()])
+        DidChangeNotification::new(self.next_versioned_identifer(), vec![self.delete_selection()])
     }
 
     pub fn delete_left(&mut self) -> DidChangeNotification {
         let caret_absolute_pos = self.get_caret_absolute_pos();
         let line = self.buffer.char_to_line(caret_absolute_pos);
-        let character_position_in_line = caret_absolute_pos - self.buffer.line_to_char(line);
-        let len_lines = self.buffer.len_lines();
+        let char_pos = caret_absolute_pos - self.buffer.line_to_char(line);
 
         // If we are currently selecting text, 
         // simply delete the selected text
         if caret_absolute_pos != self.caret_char_anchor {
-            self.lsp_versioned_identifier.version += 1;
-            return DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![self.delete_selection()]);
+            return DidChangeNotification::new(self.next_versioned_identifer(), vec![self.delete_selection()]);
         }
 
         // In case of a CRLF, delete both characters
-        // Also insert a temporary edit
+        // In case of a <TAB>, delete the corresponding spaces
         let mut offset = 1;
-        if self.see_prev_chars("\r\n") {
-            offset = 2;
+        if self.see_prev_chars("\r\n") { 
+            offset = 2 
         }
-        // In case of a <TAB>, delete the corresponding
-        // number of spaces
         else if self.see_prev_chars(" ".repeat(NUMBER_OF_SPACES_PER_TAB).as_str()) {
             offset = NUMBER_OF_SPACES_PER_TAB;
         }
 
-        // In case the previous line is also empty, we'll effectively
-        // be deleting the next line instead of the current one
-        let double_crlf = self.see_prev_chars("\r\n\r\n");
-
         let previous_char_pos = caret_absolute_pos.saturating_sub(offset);
         self.buffer.remove(previous_char_pos..caret_absolute_pos);
         self.set_selection(SelectionMode::Left, offset, false);
-        self.update_absolute_char_positions();
+        self.preserve_semantic_line_highlights(line);
 
         let new_line = self.buffer.char_to_line(previous_char_pos);
-        let new_character_position_in_line = previous_char_pos - self.buffer.line_to_char(new_line);
+        let new_char = previous_char_pos - self.buffer.line_to_char(new_line);
 
-        // In case the line has changed,
-        // insert temporary edit to preserve semantic highlights
-        // until the LSP server resolves the edit
-        if len_lines > self.buffer.len_lines() {
-            if double_crlf {
-                self.semantic_tokens_edits.push(TemporaryEdit {
-                    add_line: false,
-                    line_num: line - 1
-                })
-            }
-            else {
-                self.semantic_tokens_edits.push(TemporaryEdit {
-                    add_line: false,
-                    line_num: line
-                })
-            }
-        }
-
-        // Update the file version and return the change event
-        self.lsp_versioned_identifier.version += 1;
-        let change_event = TextDocumentContentChangeEvent {
-            text: "".to_owned(),
-            range: Some(Range {
-                start: Position::new(new_line as i64, new_character_position_in_line as i64),
-                end: Position::new(line as i64, character_position_in_line as i64),
-            })
-        };
-        DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![change_event])
+        let change_event = TextDocumentContentChangeEvent::new_delete_event(new_line, new_char, line, char_pos);
+        DidChangeNotification::new(self.next_versioned_identifer(), vec![change_event])
     }
 
     pub fn delete_left_by_word(&mut self) -> DidChangeNotification {
@@ -775,8 +560,7 @@ impl TextBuffer {
         // If we are currently selecting text, 
         // simply delete the selected text
         if caret_absolute_pos != self.caret_char_anchor {
-            self.lsp_versioned_identifier.version += 1;
-            return DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![self.delete_selection()]);
+            return DidChangeNotification::new(self.next_versioned_identifer(), vec![self.delete_selection()]);
         }
 
         // Start by moving left once, then get the boundary count
@@ -784,15 +568,15 @@ impl TextBuffer {
         let count = self.get_boundary_char_count(CharSearchDirection::Backward);
         self.set_selection(SelectionMode::Left, count, true);
 
-        self.lsp_versioned_identifier.version += 1;
-        DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![self.delete_selection()])
+        DidChangeNotification::new(self.next_versioned_identifer(), vec![self.delete_selection()])
     }
 
     // Parses and creates ranges of highlight information directly
     // from the text buffer displayed on the screen
     pub fn get_lexical_highlights(&mut self) -> Vec<(DWRITE_TEXT_RANGE, SemanticTokenTypes)> {
         let text_in_current_view = self.buffer.slice(self.absolute_char_pos_start..self.absolute_char_pos_end).to_string();
-        highlight_text(text_in_current_view.as_str(), self.language_identifier)
+        let start_it = self.buffer.chars_at(self.absolute_char_pos_start);
+        highlight_text(text_in_current_view.as_str(), self.language_identifier, start_it)
     }
 
     // Processes the semantic tokens received from the language server
@@ -829,20 +613,10 @@ impl TextBuffer {
             }
             let length = self.semantic_tokens[i + 2];
 
-            let mut line_offset: i32 = 0;
-            for edit in &self.semantic_tokens_edits {
-                if edit.add_line && line as usize >= edit.line_num {
-                    line_offset += 1;
-                }
-                else if !edit.add_line && line as usize >= edit.line_num {
-                    line_offset -= 1;
-                }
-            }
-
             match self.language_identifier {
                 CPP_LANGUAGE_IDENTIFIER => {
                     let token_type = CppSemanticTokenTypes::to_semantic_token_type(&CppSemanticTokenTypes::from_u32(self.semantic_tokens[i + 3]));
-                    let line_absolute_pos = self.buffer.line_to_char((line as i32 + line_offset) as usize);
+                    let line_absolute_pos = self.buffer.line_to_char(line as usize);
                     let range = DWRITE_TEXT_RANGE {
                         startPosition: ((line_absolute_pos + start as usize) - top_line_absolute_pos) as u32,
                         length
@@ -851,7 +625,7 @@ impl TextBuffer {
                 },
                 RUST_LANGUAGE_IDENTIFIER => {
                     let token_type = RustSemanticTokenTypes::to_semantic_token_type(&RustSemanticTokenTypes::from_u32(self.semantic_tokens[i + 3]));
-                    let line_absolute_pos = self.buffer.line_to_char((line as i32 + line_offset) as usize);
+                    let line_absolute_pos = self.buffer.line_to_char(line as usize);
                     let range = DWRITE_TEXT_RANGE {
                         startPosition: ((line_absolute_pos + start as usize) - top_line_absolute_pos) as u32,
                         length
@@ -908,21 +682,6 @@ impl TextBuffer {
         }
     }
 
-    fn get_selection_data(&self) -> String {
-        let caret_absolute_pos = self.get_caret_absolute_pos();
-
-        match self.caret_char_anchor {
-            anchor if anchor > caret_absolute_pos => {
-                self.buffer.slice(caret_absolute_pos..min(self.caret_char_anchor, self.buffer.len_chars() - 1)).to_string()
-            },
-            anchor if anchor < caret_absolute_pos => {
-                self.buffer.slice(self.caret_char_anchor..min(caret_absolute_pos, self.buffer.len_chars() - 1)).to_string()
-            },
-            // If nothing is selected, copy current line
-            _ => self.buffer.line(self.buffer.char_to_line(caret_absolute_pos)).to_string()
-        }
-    }
-
     pub fn copy_selection(&mut self, hwnd: HWND) {
         unsafe {
             if OpenClipboard(hwnd) > 0 {
@@ -961,8 +720,7 @@ impl TextBuffer {
         // If we're selecting text, delete it
         // otherwise delete the current line
         if caret_absolute_pos != self.caret_char_anchor {
-            self.lsp_versioned_identifier.version += 1;
-            return DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![self.delete_selection()]);
+            return DidChangeNotification::new(self.next_versioned_identifer(), vec![self.delete_selection()]);
         }
 
         let current_line_idx = self.buffer.char_to_line(caret_absolute_pos);
@@ -970,29 +728,20 @@ impl TextBuffer {
         let current_line_chars = self.buffer.line_to_char(current_line_idx);
         let current_line_length = current_line.len_chars();
 
+        // Slight hack to fix the semantic highlighting
+        self.caret_is_trailing = 0;
+        self.caret_char_pos = self.buffer.line_to_char(current_line_idx - 1);
+        self.preserve_semantic_line_highlights(current_line_idx);
+
         // Update caret position
         self.caret_char_pos = current_line_chars;
         self.caret_is_trailing = 0;
         self.caret_char_anchor = self.caret_char_pos;
 
         self.buffer.remove(current_line_chars..current_line_chars + current_line_length);
-        self.update_absolute_char_positions();
 
-        // Add a temporary semantic highlight edit
-        self.semantic_tokens_edits.push(TemporaryEdit {
-            add_line: false,
-            line_num: min(current_line_idx + 1, self.buffer.len_lines() - 1)
-        });
-
-        let change_event = TextDocumentContentChangeEvent {
-            text: "".to_owned(),
-            range: Some(Range {
-                start: Position::new(current_line_idx as i64, 0 as i64),
-                end: Position::new((current_line_idx + 1) as i64, 0 as i64),
-            })
-        };
-        self.lsp_versioned_identifier.version += 1;
-        DidChangeNotification::new(self.lsp_versioned_identifier.clone(), vec![change_event])
+        let change_event = TextDocumentContentChangeEvent::new_delete_event(current_line_idx, 0, current_line_idx + 1, 0);
+        DidChangeNotification::new(self.next_versioned_identifer(), vec![change_event])
     }
 
     pub fn paste(&mut self, hwnd: HWND) -> Option<DidChangeNotification> {
@@ -1094,6 +843,15 @@ impl TextBuffer {
         (self.line_numbers_layout, self.line_numbers_layer_params)
     }
 
+    pub fn on_editor_action(&mut self) {
+        // In theory for some actions such as selecting text
+        // the absolute char positions need not be updated. However,
+        // for readability and code flexibility reasons we will do it 
+        // anyway on every editor action
+        self.update_text_column_offset();
+        self.update_absolute_char_positions();
+    }
+
     pub fn on_font_change(&mut self) {
         self.update_line_numbers_margin();
         self.update_text_region();
@@ -1103,7 +861,7 @@ impl TextBuffer {
         self.update_absolute_char_positions();
     }
 
-    pub fn update_metrics(&mut self, origin: (f32, f32), extents: (f32, f32)) {
+    pub fn on_window_resize(&mut self, origin: (f32, f32), extents: (f32, f32)) {
         self.origin = origin;
         self.extents = extents;
 
@@ -1113,6 +871,126 @@ impl TextBuffer {
         self.update_text_visible_line_count();
         self.update_text_column_offset();
         self.update_absolute_char_positions();
+    }
+
+    pub fn get_current_lines(&self) -> Vec<u16> {
+        self.text_range(self.absolute_char_pos_start..self.absolute_char_pos_end)
+    }
+
+    fn next_versioned_identifer(&mut self) -> VersionedTextDocumentIdentifier {
+        self.lsp_versioned_identifier.version += 1;
+        return self.lsp_versioned_identifier.clone();
+    }
+
+    // Adds potential newlines to the temporary edits to preserve
+    // semantic highlighting until new highlights are resolved
+    // by the language server
+    fn preserve_semantic_line_highlights(&mut self, line_before_edit: usize) {
+        // We will insert delta number of lines in between the line
+        // before the edit that occured and the new line of the caret
+        let new_line = self.buffer.char_to_line(self.get_caret_absolute_pos());
+        let delta: i32 = (new_line as i32) - (line_before_edit as i32);
+
+        if delta != 0 {
+            let mut i = 0;
+            let mut line = 0;
+            while i < self.semantic_tokens.len() {
+                let delta_line = self.semantic_tokens[i];
+                line += delta_line;
+    
+                if line >= (line_before_edit as u32) {
+                    if delta > 0 {
+                        self.semantic_tokens[i] += delta.abs() as u32;
+                    }
+                    else {
+                        self.semantic_tokens[i] -= delta.abs() as u32;
+                    }
+                    break;
+                }
+                i += 5;
+            }
+        }
+    }
+
+    // Adds a character to the temporary edits to preserve
+    // semantic highlighting until new highlights are resolved
+    // by the language server
+    fn preserve_semantic_char_highlights(&mut self, line_pos: usize, char_pos_in_line: usize) {
+        let mut i = 0;
+        let mut line = 0;
+        let mut start = 0;
+
+        while i < self.semantic_tokens.len() {
+            let delta_line = self.semantic_tokens[i];
+            line += delta_line;
+
+            let delta_start = self.semantic_tokens[i + 1];
+            if delta_line == 0 {
+                start += delta_start;
+            }
+            else {
+                start = delta_start;
+            }
+            let length = self.semantic_tokens[i + 2];
+
+            if line == (line_pos as u32) {
+                if (start + length) == (char_pos_in_line as u32) {
+                    self.semantic_tokens[i + 2] += 1;
+                }
+            }
+
+            i += 5;
+        }
+    }
+
+    fn linebreaks_before_line(&self, line: usize) -> usize {
+        let mut line_start = self.buffer.chars_at(self.buffer.line_to_char(line));
+        match line_start.prev() {
+            Some('\n') => if line_start.prev() == Some('\r') { 2 } else { 1 }
+            // For completeness, we will count all linebreaks
+            // that ropey supports
+            Some('\u{000B}') | Some('\u{000C}') |
+            Some('\u{000D}') | Some('\u{0085}') |
+            Some('\u{2028}') | Some('\u{2029}') => 1,
+            _ => 0
+        }
+    }
+
+    fn see_chars(&self, string: &str) -> bool {
+        let mut rope_iterator = self.buffer.chars_at(self.get_caret_absolute_pos());
+        for chr in string.chars() {
+            match rope_iterator.next() {
+                Some(x) if x == chr => continue,
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    fn see_prev_chars(&self, string: &str) -> bool {
+        let mut rope_iterator = self.buffer.chars_at(self.get_caret_absolute_pos());
+        for chr in string.chars().rev() {
+            match rope_iterator.prev() {
+                Some(x) if x == chr => continue,
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    fn get_selection_data(&self) -> String {
+        let caret_absolute_pos = self.get_caret_absolute_pos();
+
+        match self.caret_char_anchor {
+            anchor if anchor > caret_absolute_pos => {
+                self.buffer.slice(caret_absolute_pos..min(self.caret_char_anchor, self.buffer.len_chars() - 1)).to_string()
+            },
+            anchor if anchor < caret_absolute_pos => {
+                self.buffer.slice(self.caret_char_anchor..min(caret_absolute_pos, self.buffer.len_chars() - 1)).to_string()
+            },
+            // If nothing is selected, copy current line
+            _ => self.buffer.line(self.buffer.char_to_line(caret_absolute_pos)).to_string()
+        }
     }
 
     fn update_line_numbers_margin(&mut self) {
@@ -1185,8 +1063,58 @@ impl TextBuffer {
         }
     }
 
-    pub fn get_current_lines(&self) -> Vec<u16> {
-        self.text_range(self.absolute_char_pos_start..self.absolute_char_pos_end)
+    // Underscore is treated as part of a word to make movement
+    // programming in snake_case easier.
+    fn is_word(chr: char) -> bool {
+        chr.is_alphanumeric() || chr == '_'
+    }
+
+    fn get_char_type(chr: char) -> CharType {
+        match chr {
+            x if Self::is_word(x) => CharType::Word,
+            x if Self::is_linebreak(x) => CharType::Linebreak,
+            _ => CharType::Punctuation
+        }
+    }
+
+    // Finds the number of characters until a boundary
+    // A boundary is defined to be punctuation when the
+    // current char is inside a word, and alphanumeric otherwise
+    // bool specifies the direction to search in,
+    // true for right false for left
+    fn get_boundary_char_count(&self, search_direction: CharSearchDirection) -> usize {
+        let caret_absolute_pos = self.get_caret_absolute_pos();
+        let mut count = 0;
+
+        match search_direction {
+            CharSearchDirection::Forward => {
+                if caret_absolute_pos == self.buffer.len_chars() {
+                    return 0;
+                }
+                let current_char_type = Self::get_char_type(self.buffer.char(self.caret_char_pos));
+                for chr in self.buffer.chars_at(self.get_caret_absolute_pos()) {
+                    if Self::get_char_type(chr) != current_char_type {
+                        break;
+                    }
+                    count += 1;
+                }
+            },
+            CharSearchDirection::Backward => {
+                if caret_absolute_pos == 0 {
+                    return 0;
+                }
+                let current_char_type = Self::get_char_type(self.buffer.char(self.caret_char_pos));
+                let mut chars = self.buffer.chars_at(self.caret_char_pos);
+                while let Some(chr) = chars.prev() {
+                    if Self::get_char_type(chr) != current_char_type {
+                        break;
+                    }
+                    count += 1;
+                }
+            }
+        }
+
+        count
     }
 
     fn text_range<R>(&self, char_range: R) -> Vec<u16> where R: RangeBounds<usize> {
@@ -1208,5 +1136,10 @@ impl TextBuffer {
             100000000..=999999999 => 9,
             1000000000..=4294967295 => 10
         }
+    }
+
+    fn is_linebreak(chr: char) -> bool {
+        chr == '\n' || chr == '\r' || chr == '\u{000B}' || chr == '\u{000C}' || 
+        chr == '\u{0085}' || chr == '\u{2028}' || chr == '\u{2029}'
     }
 }

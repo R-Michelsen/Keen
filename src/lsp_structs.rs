@@ -275,7 +275,6 @@ impl RustSemanticTokenTypes {
 
     pub fn to_semantic_token_type(rust_token_type: &Self) -> SemanticTokenTypes {
         match rust_token_type {
-            Self::Comment             => SemanticTokenTypes::Comment,
             Self::Keyword             => SemanticTokenTypes::Keyword,
             Self::String | Self::Number | Self::Lifetime            
                                       => SemanticTokenTypes::Literal,
@@ -286,7 +285,7 @@ impl RustSemanticTokenTypes {
             Self::Macro               => SemanticTokenTypes::Macro,
             Self::Variable            => SemanticTokenTypes::Variable,
             Self::BuiltinType         => SemanticTokenTypes::Primitive,
-            Self::Interface | Self::TypeParameter | Self::Member |  
+            Self::Comment | Self::Interface | Self::TypeParameter | Self::Member |  
             Self::Property | Self::Parameter | Self::Label |
             Self::Attribute | Self::EnumMember | Self::Regexp |             
             Self::Operator | Self::Namespace | Self::Type |               
@@ -392,6 +391,27 @@ pub struct Range {
 pub struct TextDocumentContentChangeEvent {
     pub range: Option<Range>,
     pub text: String
+}
+
+impl TextDocumentContentChangeEvent {
+    pub fn new_delete_event(start_line: usize, start_char: usize, end_line: usize, end_char: usize) -> Self {
+        Self {
+            text: "".to_owned(),
+            range: Some(Range {
+                start: Position::new(start_line as i64, start_char as i64),
+                end: Position::new(end_line as i64, end_char as i64),
+            })
+        }
+    }
+    pub fn new_insert_event(text: String, start_line: usize, start_char: usize, end_line: usize, end_char: usize) -> Self {
+        Self {
+            text,
+            range: Some(Range {
+                start: Position::new(start_line as i64, start_char as i64),
+                end: Position::new(end_line as i64, end_char as i64),
+            })
+        }
+    }
 }
 
 #[derive(Serialize)]

@@ -1,4 +1,5 @@
 use winapi::um::dwrite::DWRITE_TEXT_RANGE;
+use ropey::iter::Chars;
 use crate::lsp_structs::SemanticTokenTypes;
 
 pub const CPP_KEYWORDS: [&str; 92] = ["alignas", "alignof", "and", "and_eq", "asm", 
@@ -27,7 +28,7 @@ pub const RUST_FILE_EXTENSIONS: [&str; 1] = ["rs"];
 pub const RUST_LSP_SERVER: &str = "rust-analyzer";
 pub const RUST_LANGUAGE_IDENTIFIER: &str = "rust";
 
-pub fn highlight_text(text: &str, language_identifier: &'static str) -> Vec<(DWRITE_TEXT_RANGE, SemanticTokenTypes)> {
+pub fn highlight_text(text: &str, language_identifier: &'static str, mut start_it: Chars) -> Vec<(DWRITE_TEXT_RANGE, SemanticTokenTypes)> {
     let mut highlights = Vec::new();
 
     // Singleline and multiline comments style
@@ -43,7 +44,31 @@ pub fn highlight_text(text: &str, language_identifier: &'static str) -> Vec<(DWR
     let mut identifier = String::from("");
     while offset < text.len() {
         let slice = unsafe { text.get_unchecked(offset..text.len()) };
-        if slice.starts_with(ml_comment[0]) {
+        // If we run into a multiline comment ending,
+        // we need to look back and find its counterpart
+        // if there is one.
+        if slice.starts_with(ml_comment[1]) {
+            let to_match: Vec<char> = ml_comment[0].chars().rev().collect();
+            let length = to_match.len();
+            let mut index = 0;
+            while let Some(chr) = start_it.prev() {
+                if chr == to_match[index] {
+                    index += 1;
+                    // Found a match, highlight the code
+                    if index == length {
+                        let range = DWRITE_TEXT_RANGE {
+                            startPosition: 0 as u32,
+                            length: (offset + 2) as u32
+                        };
+                        highlights.push((range, SemanticTokenTypes::Comment));
+                    }
+                }
+                else {
+                    index = 0;
+                }
+            }
+        }
+        else if slice.starts_with(ml_comment[0]) {
             if let Some(mlc_end) = slice.find(ml_comment[1]) {
                 let range = DWRITE_TEXT_RANGE {
                     startPosition: offset as u32,
@@ -61,13 +86,6 @@ pub fn highlight_text(text: &str, language_identifier: &'static str) -> Vec<(DWR
                 highlights.push((range, SemanticTokenTypes::Comment));
                 break;
             }
-        }
-        else if slice.starts_with(ml_comment[1]) {
-            let range = DWRITE_TEXT_RANGE {
-                startPosition: 0 as u32,
-                length: (offset + 2) as u32
-            };
-            highlights.push((range, SemanticTokenTypes::Comment));
         }
         else if slice.starts_with(string_literal) {
             let mut string_offset = 1;
