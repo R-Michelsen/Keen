@@ -427,6 +427,8 @@ impl TextBuffer {
 
         self.preserve_semantic_line_highlights(current_line);
         self.caret_is_trailing = 0;
+        self.update_view();
+
         change_event
     }
 
@@ -903,7 +905,7 @@ impl TextBuffer {
                         self.semantic_tokens[i] += delta.abs() as u32;
                     }
                     else {
-                        self.semantic_tokens[i] -= delta.abs() as u32;
+                        self.semantic_tokens[i] = self.semantic_tokens[i].saturating_sub(delta.abs() as u32);
                     }
                     break;
                 }
@@ -1060,6 +1062,15 @@ impl TextBuffer {
         }
         else {
             self.absolute_char_pos_end = self.buffer.line_to_char(self.bot_line) + self.buffer.line(self.bot_line).len_chars();
+        }
+    }
+
+    // Updates the view in case the current line
+    // is not within the current view
+    fn update_view(&mut self) {
+        let current_line = self.buffer.char_to_line(self.get_caret_absolute_pos());
+        if current_line > self.bot_line || current_line < self.top_line {
+            self.top_line = current_line;
         }
     }
 
