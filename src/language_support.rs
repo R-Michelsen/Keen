@@ -28,6 +28,13 @@ pub const RUST_FILE_EXTENSIONS: [&str; 1] = ["rs"];
 pub const RUST_LSP_SERVER: &str = "rust-analyzer";
 pub const RUST_LANGUAGE_IDENTIFIER: &str = "rust";
 
+fn new_range(start: usize, length: usize) -> DWRITE_TEXT_RANGE {
+    DWRITE_TEXT_RANGE {
+        startPosition: start as u32,
+        length: length as u32
+    }
+}
+
 pub fn highlight_text(text: &str, language_identifier: &'static str, mut start_it: Chars) -> Vec<(DWRITE_TEXT_RANGE, SemanticTokenTypes)> {
     let mut highlights = Vec::new();
 
@@ -40,6 +47,38 @@ pub fn highlight_text(text: &str, language_identifier: &'static str, mut start_i
     let string_literal = '"';
     let escaped_string_literal = "\\\"";
 
+    // Initially we need to look back and see if the first line 
+    // already inside a multiline comment
+    let mut inside_comment = false;
+    let do_match: Vec<char> = ml_comment[0].chars().rev().collect();
+    let dont_match: Vec<char> = ml_comment[1].chars().rev().collect();
+    let length0 = do_match.len();
+    let length1 = dont_match.len();
+    let mut index0 = 0;
+    let mut index1 = 0;
+    while let Some(chr) = start_it.prev() {
+        if chr == do_match[index0] {
+            index0 += 1;
+            // Found a match, the first line is inside a multiline comment
+            if index0 == length0 {
+                inside_comment = true;
+            }
+        }
+        else {
+            index0 = 0;
+        }
+        if chr == dont_match[index1] {
+            index1 += 1;
+            if index1 == length1 {
+                // A closing bracket was found first, return
+                break;
+            }
+        }
+        else {
+            index1 = 0;
+        }
+    }
+
     let mut offset = 0;
     let mut identifier = String::from("");
     while offset < text.len() {
@@ -48,42 +87,19 @@ pub fn highlight_text(text: &str, language_identifier: &'static str, mut start_i
         // we need to look back and find its counterpart
         // if there is one.
         if slice.starts_with(ml_comment[1]) {
-            let to_match: Vec<char> = ml_comment[0].chars().rev().collect();
-            let length = to_match.len();
-            let mut index = 0;
-            while let Some(chr) = start_it.prev() {
-                if chr == to_match[index] {
-                    index += 1;
-                    // Found a match, highlight the code
-                    if index == length {
-                        let range = DWRITE_TEXT_RANGE {
-                            startPosition: 0 as u32,
-                            length: (offset + 2) as u32
-                        };
-                        highlights.push((range, SemanticTokenTypes::Comment));
-                    }
-                }
-                else {
-                    index = 0;
-                }
+            if inside_comment {
+                highlights.push((new_range(0, offset + 2), SemanticTokenTypes::Comment));
+                inside_comment = false;
             }
         }
         else if slice.starts_with(ml_comment[0]) {
             if let Some(mlc_end) = slice.find(ml_comment[1]) {
-                let range = DWRITE_TEXT_RANGE {
-                    startPosition: offset as u32,
-                    length: (mlc_end + 2) as u32
-                };
-                highlights.push((range, SemanticTokenTypes::Comment));
+                highlights.push((new_range(offset, mlc_end + 2), SemanticTokenTypes::Comment));
                 offset += mlc_end + 2;
                 continue;
             }
             else {
-                let range = DWRITE_TEXT_RANGE {
-                    startPosition: offset as u32,
-                    length: (text.len() - offset) as u32
-                };
-                highlights.push((range, SemanticTokenTypes::Comment));
+                highlights.push((new_range(offset, text.len() - offset), SemanticTokenTypes::Comment));
                 break;
             }
         }
@@ -100,30 +116,18 @@ pub fn highlight_text(text: &str, language_identifier: &'static str, mut start_i
                 }
                 string_offset += 1;
             }
-            let range = DWRITE_TEXT_RANGE {
-                startPosition: offset as u32,
-                length: (string_offset + 1) as u32
-            };
-            highlights.push((range, SemanticTokenTypes::Literal));
+            highlights.push((new_range(offset, string_offset + 1), SemanticTokenTypes::Literal));
             offset += string_offset + 1;
         }
         else if slice.starts_with(sl_comment) {
             // Find the number of bytes until the next newline
             if let Some(newline_offset) = slice.find(|c: char| c == '\n' || c == '\r') {
-                let range = DWRITE_TEXT_RANGE {
-                    startPosition: offset as u32,
-                    length: newline_offset as u32
-                };
-                highlights.push((range, SemanticTokenTypes::Comment));
+                highlights.push((new_range(offset, newline_offset), SemanticTokenTypes::Comment));
                 offset += newline_offset;
                 continue;
             }
             else {
-                let range = DWRITE_TEXT_RANGE {
-                    startPosition: offset as u32,
-                    length: (text.len() - offset) as u32
-                };
-                highlights.push((range, SemanticTokenTypes::Comment));
+                highlights.push((new_range(offset, text.len() - offset), SemanticTokenTypes::Comment));
             }
         }
         else if slice.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '#') {
@@ -136,23 +140,22 @@ pub fn highlight_text(text: &str, language_identifier: &'static str, mut start_i
                 _ => false
             };
             if keyword_match {
-                let range = DWRITE_TEXT_RANGE {
-                    startPosition: (offset - identifier.len()) as u32,
-                    length: identifier.len() as u32
-                };
-                highlights.push((range, SemanticTokenTypes::Keyword));
+                highlights.push((new_range(offset - identifier.len(), identifier.len()), SemanticTokenTypes::Keyword));
             }
             else if language_identifier == CPP_LANGUAGE_IDENTIFIER && identifier.starts_with('#') {
-                let range = DWRITE_TEXT_RANGE {
-                    startPosition: (offset - identifier.len()) as u32,
-                    length: identifier.len() as u32
-                };
-                highlights.push((range, SemanticTokenTypes::Preprocessor));
+                highlights.push((new_range(offset - identifier.len(), identifier.len()), SemanticTokenTypes::Preprocessor));
             }
             identifier = String::from("");
         }
         
         offset += 1;
+    }
+
+    // If the first line of the view is inside
+    // a comment and no match was found, the entire
+    // view is inside a comment
+    if inside_comment {
+        return vec![(new_range(0, text.len()), SemanticTokenTypes::Comment)];
     }
 
     highlights

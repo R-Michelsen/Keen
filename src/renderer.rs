@@ -319,7 +319,10 @@ impl TextRenderer {
 
             let lexical_highlights = text_buffer.get_lexical_highlights();
             let semantic_highlights = text_buffer.get_semantic_highlights();
-            for (range, token_type) in lexical_highlights.into_iter().chain(semantic_highlights) {
+            // In case of overlap, lexical highlights trump semantic for now.
+            // This is to ensure that commenting out big sections of code happen
+            // instantaneously
+            for (range, token_type) in semantic_highlights.into_iter().chain(lexical_highlights) {
                 match token_type {
                     SemanticTokenTypes::None | SemanticTokenTypes::Variable          
                                                           => {},
