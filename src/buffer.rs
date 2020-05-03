@@ -1,5 +1,5 @@
 use crate::dx_ok;
-use crate::settings::NUMBER_OF_SPACES_PER_TAB;
+use crate::settings::{NUMBER_OF_SPACES_PER_TAB, AUTOCOMPLETE_BRACKETS};
 use crate::lsp_structs::{DidChangeNotification, TextDocumentContentChangeEvent, 
                     VersionedTextDocumentIdentifier, SemanticTokenTypes, CppSemanticTokenTypes, 
                     RustSemanticTokenTypes, RustSemanticTokenModifiers};
@@ -401,8 +401,8 @@ impl TextBuffer {
 
     pub fn delete_selection(&mut self) -> TextDocumentContentChangeEvent {
         let caret_absolute_pos = self.get_caret_absolute_pos();
-        let current_line = self.buffer.char_to_line(caret_absolute_pos);
-        let current_char = caret_absolute_pos - self.buffer.line_to_char(current_line);
+        let line = self.buffer.char_to_line(caret_absolute_pos);
+        let char_pos = caret_absolute_pos - self.buffer.line_to_char(line);
 
         let change_event = if caret_absolute_pos < self.caret_char_anchor {
             let end_line = self.buffer.char_to_line(self.caret_char_anchor);
@@ -412,7 +412,7 @@ impl TextBuffer {
             self.caret_char_pos = caret_absolute_pos;
             self.caret_char_anchor = self.caret_char_pos;
 
-            TextDocumentContentChangeEvent::new_delete_event(current_line, current_char, end_line, end_char)
+            TextDocumentContentChangeEvent::new_delete_event(line, char_pos, end_line, end_char)
         }
         else {
             let start_line = self.buffer.char_to_line(self.caret_char_anchor);
@@ -422,14 +422,40 @@ impl TextBuffer {
             let caret_anchor_delta = caret_absolute_pos - self.caret_char_anchor;
             self.caret_char_pos = caret_absolute_pos - caret_anchor_delta;
 
-            TextDocumentContentChangeEvent::new_delete_event(start_line, start_char, current_line, current_char)
+            TextDocumentContentChangeEvent::new_delete_event(start_line, start_char, line, char_pos)
         };
 
-        self.preserve_semantic_line_highlights(current_line);
+        self.preserve_semantic_line_highlights(line, self.get_current_line());
         self.caret_is_trailing = 0;
         self.update_view();
 
         change_event
+    }
+
+    pub fn insert_newline(&mut self) -> DidChangeNotification {
+        let offset = self.get_leading_whitespace_offset();
+
+        // If we're opening a bracket, insert a <TAB>s worth of indentation
+        // on the next line
+        if let Some(prev_char) = self.buffer.chars_at(self.get_caret_absolute_pos()).prev() {
+            for brackets in &AUTOCOMPLETE_BRACKETS {
+                if brackets[0] == prev_char {
+                    let change_notification = self.insert_chars(
+                        format!("{}{}{}{}{}{}", 
+                            "\r\n", 
+                            " ".repeat(offset),
+                            " ".repeat(NUMBER_OF_SPACES_PER_TAB),
+                            "\r\n",
+                            " ".repeat(offset),
+                            brackets[1],
+                        ).as_str());
+                    self.set_selection(SelectionMode::Left, offset + 3, false);
+                    return change_notification;
+                }
+            }
+        }
+
+        self.insert_chars(format!("{}{}", "\r\n", " ".repeat(offset)).as_str())
     }
 
     pub fn insert_chars(&mut self, chars: &str) -> DidChangeNotification {
@@ -446,7 +472,7 @@ impl TextBuffer {
 
         self.buffer.insert(caret_absolute_pos, chars);
         self.set_selection(SelectionMode::Right, chars.len(), false);
-        self.preserve_semantic_line_highlights(line);
+        self.preserve_semantic_line_highlights(line, self.get_current_line());
 
         let change_event = TextDocumentContentChangeEvent::new_insert_event(chars.to_owned(), line, char_pos, line, char_pos);
         changes.push(change_event);
@@ -496,13 +522,15 @@ impl TextBuffer {
         else if self.see_prev_chars(" ".repeat(NUMBER_OF_SPACES_PER_TAB).as_str()) {
             offset = NUMBER_OF_SPACES_PER_TAB;
         }
-        self.preserve_semantic_line_highlights(line);
 
         let next_char_pos = min(caret_absolute_pos + offset, self.buffer.len_chars());
-        self.buffer.remove(caret_absolute_pos..next_char_pos);
-
         let new_line = self.buffer.char_to_line(next_char_pos);
         let new_char = next_char_pos - self.buffer.line_to_char(new_line);
+
+        self.buffer.remove(caret_absolute_pos..next_char_pos);
+        if new_line > line {
+            self.preserve_semantic_line_highlights(line, line - 1);
+        }
         
         let change_event = TextDocumentContentChangeEvent::new_delete_event(line, char_pos, new_line, new_char);
         DidChangeNotification::new(self.next_versioned_identifer(), vec![change_event])
@@ -547,7 +575,7 @@ impl TextBuffer {
         let previous_char_pos = caret_absolute_pos.saturating_sub(offset);
         self.buffer.remove(previous_char_pos..caret_absolute_pos);
         self.set_selection(SelectionMode::Left, offset, false);
-        self.preserve_semantic_line_highlights(line);
+        self.preserve_semantic_line_highlights(line, self.get_current_line());
 
         let new_line = self.buffer.char_to_line(previous_char_pos);
         let new_char = previous_char_pos - self.buffer.line_to_char(new_line);
@@ -689,6 +717,10 @@ impl TextBuffer {
             if OpenClipboard(hwnd) > 0 {
                 if EmptyClipboard() > 0 {
                     let data = self.get_selection_data();
+                    if data.len() == 0 {
+                        CloseClipboard();
+                        return;
+                    }
                     // +1 since str.len() returns the length minus the null-byte
                     let byte_size = data.len() + 1;
                     let clipboard_data_ptr = GlobalAlloc(GMEM_DDESHARE | GMEM_ZEROINIT, byte_size);
@@ -731,9 +763,9 @@ impl TextBuffer {
         let current_line_length = current_line.len_chars();
 
         // Slight hack to fix the semantic highlighting
-        self.caret_is_trailing = 0;
-        self.caret_char_pos = self.buffer.line_to_char(current_line_idx - 1);
-        self.preserve_semantic_line_highlights(current_line_idx);
+        // self.caret_is_trailing = 0;
+        // self.caret_char_pos = self.buffer.line_to_char(current_line_idx - 1);
+        self.preserve_semantic_line_highlights(current_line_idx, current_line_idx.saturating_sub(1));
 
         // Update caret position
         self.caret_char_pos = current_line_chars;
@@ -875,6 +907,10 @@ impl TextBuffer {
         self.update_absolute_char_positions();
     }
 
+    pub fn get_current_line(&self) -> usize {
+        self.buffer.char_to_line(self.get_caret_absolute_pos())
+    }
+
     pub fn get_current_lines(&self) -> Vec<u16> {
         self.text_range(self.absolute_char_pos_start..self.absolute_char_pos_end)
     }
@@ -887,11 +923,10 @@ impl TextBuffer {
     // Adds potential newlines to the temporary edits to preserve
     // semantic highlighting until new highlights are resolved
     // by the language server
-    fn preserve_semantic_line_highlights(&mut self, line_before_edit: usize) {
+    fn preserve_semantic_line_highlights(&mut self, line_before_edit: usize, line_after_edit: usize) {
         // We will insert delta number of lines in between the line
         // before the edit that occured and the new line of the caret
-        let new_line = self.buffer.char_to_line(self.get_caret_absolute_pos());
-        let delta: i32 = (new_line as i32) - (line_before_edit as i32);
+        let delta: i32 = (line_after_edit as i32) - (line_before_edit as i32);
 
         if delta != 0 {
             let mut i = 0;
@@ -900,7 +935,7 @@ impl TextBuffer {
                 let delta_line = self.semantic_tokens[i];
                 line += delta_line;
     
-                if line >= (line_before_edit as u32) {
+                if line > (line_before_edit as u32) {
                     if delta > 0 {
                         self.semantic_tokens[i] += delta.abs() as u32;
                     }
@@ -1075,7 +1110,7 @@ impl TextBuffer {
     }
 
     // Underscore is treated as part of a word to make movement
-    // programming in snake_case easier.
+    // programming in snake_case easier
     fn is_word(chr: char) -> bool {
         chr.is_alphanumeric() || chr == '_'
     }
@@ -1086,6 +1121,21 @@ impl TextBuffer {
             x if Self::is_linebreak(x) => CharType::Linebreak,
             _ => CharType::Punctuation
         }
+    }
+
+    // Gets the amount of leading whitespace on the current line.
+    // To help with auto indentation
+    fn get_leading_whitespace_offset(&self) -> usize {
+        let mut line_slice = self.buffer.line(self.buffer.char_to_line(self.get_caret_absolute_pos())).chars();
+        let mut offset = 0;
+        while let Some(chr) = line_slice.next() {
+            match chr {
+                ' ' => offset += 1,
+                '\t' => offset += NUMBER_OF_SPACES_PER_TAB,
+                _ => break
+            }
+        }
+        offset
     }
 
     // Finds the number of characters until a boundary

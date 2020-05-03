@@ -109,7 +109,7 @@ impl Editor {
 
         let lsp_client = self.lsp_client.as_mut().unwrap();
         let text = std::fs::read_to_string(os_path).unwrap();
-        lsp_client.send_open_file_notification(file_prefix.clone() + path, language_identifier.to_owned(), text);
+        lsp_client.send_did_open_notification(file_prefix.clone() + path, language_identifier.to_owned(), text);
         lsp_client.send_semantic_token_request(file_prefix + path);
     }
 
@@ -184,7 +184,7 @@ impl Editor {
                         ""
                     };
                     let text = std::fs::read_to_string(os_path).unwrap();
-                    lsp_client.send_open_file_notification(file_prefix.clone() + path.as_str(), language_identifier.to_owned(), text);
+                    lsp_client.send_did_open_notification(file_prefix.clone() + path.as_str(), language_identifier.to_owned(), text);
                     lsp_client.send_semantic_token_request(file_prefix + path.as_str());
                 },
                 LSPRequestType::SemanticTokenRequest(uri) => {
@@ -321,7 +321,7 @@ impl Editor {
                             }
                         },
                         (VK_RETURN, false) => {
-                            let did_change_notification = buffer.insert_chars("\r\n");
+                            let did_change_notification = buffer.insert_newline();
                             if let Some(lsp_client) = self.lsp_client.as_mut() {
                                 Self::process_document_change(&did_change_notification, buffer, lsp_client);
                             }

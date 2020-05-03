@@ -148,11 +148,11 @@ impl LSPClient {
         self.send_notification(serialized_init_notification.as_str());
     }
     
-    pub fn send_open_file_notification(&mut self, uri: String, language_id: String, text: String) {
-        let open_file_notification = DidOpenNotification::new(uri, language_id, text);
-        let serialized_open_file_notification = serde_json::to_string(&open_file_notification).unwrap();
-
-        self.send_notification(serialized_open_file_notification.as_str());
+    pub fn send_did_open_notification(&mut self, uri: String, language_id: String, text: String) {
+        let did_open_notification = DidOpenNotification::new(uri, language_id, text);
+        let serialized_did_open_notification = serde_json::to_string(&did_open_notification).unwrap();
+        
+        self.send_notification(serialized_did_open_notification.as_str());
     }
 
     pub fn send_semantic_token_request(&mut self, uri: String) {
