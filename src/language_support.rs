@@ -1,7 +1,11 @@
-use winapi::um::dwrite::DWRITE_TEXT_RANGE;
-use ropey::iter::Chars;
 use crate::lsp_structs::SemanticTokenTypes;
 use crate::text_utils;
+
+use std::collections::HashMap;
+
+use winapi::um::dwrite::DWRITE_TEXT_RANGE;
+use ropey::iter::Chars;
+
 
 pub const CPP_KEYWORDS: [&str; 92] = ["alignas", "alignof", "and", "and_eq", "asm", 
 "auto", "bitand", "bitor", "bool", "break", "case", "catch", "char", "char8_t", 
@@ -38,10 +42,10 @@ fn new_range(start: usize, length: usize) -> DWRITE_TEXT_RANGE {
 
 pub struct LexicalHighlights {
     pub highlight_tokens: Vec<(DWRITE_TEXT_RANGE, SemanticTokenTypes)>,
-    pub enclosing_brackets: Option<[usize; 2]>
+    pub enclosing_brackets: Option<[Option<usize>; 2]>
 }
 
-pub fn highlight_text(text: &str, caret_pos: usize, language_identifier: &'static str, mut start_it: Chars) -> LexicalHighlights {
+pub fn highlight_text(text: &str, start_pos: usize, caret_pos: usize, language_identifier: &'static str, mut start_it: Chars, mut caret_it: Chars) -> LexicalHighlights {
     let mut highlight_tokens = Vec::new();
 
     // Singleline and multiline comments style
@@ -177,44 +181,84 @@ pub fn highlight_text(text: &str, caret_pos: usize, language_identifier: &'stati
         false
     };
 
-    let mut brackets_to_match = ('\0', '\0');
-    let mut bracket_open_pos = 0;
-    let mut brackets_offset = 0;
-    // Find enclosing brackets
-    for (offset, chr) in text.chars().enumerate() {
-        if let Some(brackets) = text_utils::is_opening_bracket(chr) {
-            if contained_in_comments(offset as u32) {
-                continue;
-            }
-            if offset < caret_pos {
-                if brackets != brackets_to_match {
-                    brackets_to_match = brackets;
-                    brackets_offset = 0;
-                }
-                bracket_open_pos = offset;
-            }
-            else {
-                if brackets == brackets_to_match {
-                    brackets_offset += 1;
+    // TODO: The following part finds matching bracket pairs that
+    // are not inside comments. It searches beyond the visible
+    // text buffer range. In the future perhaps it would be better
+    // to only search a certain distance in case no bracket match is found
+
+    // Iterate backwards searching for an opening bracket
+    let mut closed_map: HashMap<char, usize> = HashMap::new();
+    let mut bracket_type = ('\0', '\0');
+    let mut backwards_offset = 0;
+    while let Some(prev_char) = caret_it.prev() {
+        if let Some(brackets) = text_utils::is_opening_bracket(prev_char) {
+            match closed_map.get_mut(&brackets.1) {
+                Some(size) if *size > 0 => {
+                    *size -= 1;
+                },
+                _ => {
+                    bracket_type = brackets;
+                    backwards_offset += 1;
+                    break;
                 }
             }
         }
-        else if let Some(brackets) = text_utils::is_closing_bracket(chr) {
-            if contained_in_comments(offset as u32) {
+        if let Some(brackets) = text_utils::is_closing_bracket(prev_char) {
+            *closed_map.entry(brackets.1).or_insert(0) += 1;
+        }
+        backwards_offset += 1;
+    }
+
+    // If no opening bracket was found behind the cursor, just return
+    if bracket_type == ('\0', '\0') {
+        return LexicalHighlights {
+            highlight_tokens,
+            enclosing_brackets: None
+        };
+    }
+
+    // Now search forward from the same iterator to find the matching
+    // closing bracket
+    let mut closing_brackets_left = 0;
+    for (offset, chr) in caret_it.enumerate() {
+        // Skip the first char as it is the opening bracket itself
+        if offset == 0 { continue; }
+        let relative_pos = offset + (backwards_offset + caret_pos);
+
+        if let Some(brackets) = text_utils::is_closing_bracket(chr) {
+            if contained_in_comments(relative_pos as u32) {
                 continue;
             }
-            if offset >= caret_pos {
-                if brackets.1 == brackets_to_match.1 {
-                    if brackets_offset == 0 {
-                        return LexicalHighlights {
-                            highlight_tokens,
-                            enclosing_brackets: Some([bracket_open_pos, offset])
-                        };
-                    }
-                    else {
-                        brackets_offset -= 1;
+
+            if bracket_type == brackets {
+                if closing_brackets_left == 0 {
+                    // Get the left bracket position relative to the absolute
+                    // start position of the current view
+                    let left_pos = (caret_pos as isize - start_pos as isize) - backwards_offset as isize;
+                    let right_pos = left_pos + offset as isize;
+
+                    // Only include a position if its inside the visible
+                    // range of the current text buffer
+                    let visible_range = 0..text.len();
+                    return LexicalHighlights {
+                        highlight_tokens,
+                        enclosing_brackets: Some([
+                            if visible_range.contains(&(left_pos as usize)) { Some(left_pos  as usize) } else { None },
+                            if visible_range.contains(&(right_pos  as usize)) { Some(right_pos  as usize) } else { None }
+                        ])
                     }
                 }
+                else {
+                    closing_brackets_left -= 1;
+                }
+            }
+        }
+        else if let Some(brackets) = text_utils::is_opening_bracket(chr) {
+            if contained_in_comments(relative_pos as u32) {
+                continue;
+            }
+            if bracket_type == brackets {
+                closing_brackets_left += 1;
             }
         }
     }

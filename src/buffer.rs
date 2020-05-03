@@ -653,14 +653,13 @@ impl TextBuffer {
     // Parses and creates ranges of highlight information directly
     // from the text buffer displayed on the screen
     pub fn get_lexical_highlights(&mut self) -> LexicalHighlights {
+        let caret_absolute_pos = self.get_caret_absolute_pos();
+
         let text_in_current_view = self.get_text_view_as_string();
         let start_it = self.buffer.chars_at(self.absolute_char_pos_start);
+        let caret_it = self.buffer.chars_at(caret_absolute_pos);
 
-        let caret_pos_in_view = self.get_caret_absolute_pos()
-                                    .clamp(self.absolute_char_pos_start, self.absolute_char_pos_end)
-                                    .saturating_sub(self.absolute_char_pos_start);
-
-        highlight_text(text_in_current_view.as_str(), caret_pos_in_view, self.language_identifier, start_it)
+        highlight_text(text_in_current_view.as_str(), self.absolute_char_pos_start, caret_absolute_pos, self.language_identifier, start_it, caret_it)
     }
 
     // Processes the semantic tokens received from the language server
@@ -736,7 +735,7 @@ impl TextBuffer {
     }
 
     pub fn get_caret_rect(&mut self) -> Option<D2D1_RECT_F> {
-        if self.caret_char_pos < self.absolute_char_pos_start {
+        if self.caret_char_pos < self.absolute_char_pos_start || self.caret_char_pos > self.absolute_char_pos_end {
             return None;
         }
 

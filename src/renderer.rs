@@ -291,35 +291,40 @@ impl TextRenderer {
         }
     }
 
-    fn draw_enclosing_brackets(&self, origin: (f32, f32), text_layout: *mut IDWriteTextLayout, enclosing_bracket_positions: [usize; 2]) {
+    fn draw_enclosing_brackets(&self, origin: (f32, f32), text_layout: *mut IDWriteTextLayout, enclosing_bracket_positions: [Option<usize>; 2]) {
         unsafe {
             let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
             (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
 
             for bracket_pos in &enclosing_bracket_positions {
-                let mut dummy = (0.0, 0.0);
-                dx_ok!((*text_layout).HitTestTextPosition(
-                    *bracket_pos as u32,
-                    false as i32,
-                    &mut dummy.0,
-                    &mut dummy.1,
-                    metrics_uninit.as_mut_ptr(),
-                ));
-                let metrics = metrics_uninit.assume_init();
-    
-                let highlight_rect = D2D1_RECT_F {
-                    left: origin.0 + metrics.left,
-                    top: origin.1 + metrics.top,
-                    right: origin.0 + metrics.left + metrics.width,
-                    bottom: origin.1 + metrics.top + metrics.height
-                };
-    
-                (*self.target).DrawRectangle(
-                    &highlight_rect, 
-                    self.theme.bracket_brush as *mut ID2D1Brush, 
-                    self.theme.bracket_rect_width, 
-                    null_mut()
-                );
+                match bracket_pos {
+                    Some(pos) => {
+                        let mut dummy = (0.0, 0.0);
+                        dx_ok!((*text_layout).HitTestTextPosition(
+                            *pos as u32,
+                            false as i32,
+                            &mut dummy.0,
+                            &mut dummy.1,
+                            metrics_uninit.as_mut_ptr(),
+                        ));
+                        let metrics = metrics_uninit.assume_init();
+            
+                        let highlight_rect = D2D1_RECT_F {
+                            left: origin.0 + metrics.left,
+                            top: origin.1 + metrics.top,
+                            right: origin.0 + metrics.left + metrics.width,
+                            bottom: origin.1 + metrics.top + metrics.height
+                        };
+            
+                        (*self.target).DrawRectangle(
+                            &highlight_rect, 
+                            self.theme.bracket_brush as *mut ID2D1Brush, 
+                            self.theme.bracket_rect_width, 
+                            null_mut()
+                        );
+                    },
+                    None => {}
+                }
             }
 
             (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
