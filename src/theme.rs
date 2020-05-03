@@ -9,6 +9,7 @@ use winapi::{
 const IDENTITY_MATRIX: D2D1_MATRIX_3X2_F = D2D1_MATRIX_3X2_F { matrix: [[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]] };
 
 const DEFAULT_BACKGROUND_COLOR: D3DCOLORVALUE = create_color(0x282828FF);
+const DEFAULT_BRACKET_COLOR: D3DCOLORVALUE = create_color(0xFFFFFFFF);
 const DEFAULT_TEXT_COLOR: D3DCOLORVALUE = create_color(0xFBF1C7FF);
 const DEFAULT_LINE_NUMBER_COLOR: D3DCOLORVALUE = create_color(0xD5C4A1FF);
 const DEFAULT_CARET_COLOR: D3DCOLORVALUE = create_color(0xFE8019FF);
@@ -35,6 +36,8 @@ const fn create_color(color: u32) -> D3DCOLORVALUE {
 
 pub struct Theme {
     pub background_color: D3DCOLORVALUE,
+    pub bracket_brush: *mut ID2D1SolidColorBrush,
+    pub bracket_rect_width: f32,
     pub text_brush: *mut ID2D1SolidColorBrush,
     pub line_number_brush: *mut ID2D1SolidColorBrush,
     pub caret_brush: *mut ID2D1SolidColorBrush,
@@ -56,7 +59,9 @@ impl Default for Theme {
     fn default() -> Self {
         Self {
             background_color: D3DCOLORVALUE { r: 0.0, g: 0.0, b: 0.0, a: 1.0},
+            bracket_rect_width: 0.0,
             text_brush: null_mut(),
+            bracket_brush: null_mut(),
             line_number_brush: null_mut(),
             caret_brush: null_mut(),
             selection_brush: null_mut(),
@@ -69,7 +74,7 @@ impl Default for Theme {
             keyword_brush: null_mut(),
             literal_brush: null_mut(),
             macro_preprocessor_brush: null_mut(),
-            primitive_brush: null_mut()
+            primitive_brush: null_mut(),
         }
     }
 }
@@ -78,7 +83,9 @@ impl Theme {
     pub fn new_default(target: *mut ID2D1HwndRenderTarget) -> Self {
         let mut theme = Self {
             background_color: DEFAULT_BACKGROUND_COLOR,
+            bracket_rect_width: 2.0,
             text_brush: null_mut(),
+            bracket_brush: null_mut(),
             line_number_brush: null_mut(),
             caret_brush: null_mut(),
             selection_brush: null_mut(),
@@ -101,6 +108,7 @@ impl Theme {
 
         unsafe {
             dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_TEXT_COLOR, &brush_properties, &mut theme.text_brush as *mut *mut _));
+            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_BRACKET_COLOR, &brush_properties, &mut theme.bracket_brush as *mut *mut _));
             dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_LINE_NUMBER_COLOR, &brush_properties, &mut theme.line_number_brush as *mut *mut _));
             dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_CARET_COLOR, &brush_properties, &mut theme.caret_brush as *mut *mut _));
             dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_SELECTION_COLOR, &brush_properties, &mut theme.selection_brush as *mut *mut _));

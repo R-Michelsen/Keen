@@ -3,10 +3,10 @@ use crate::settings::{NUMBER_OF_SPACES_PER_TAB, AUTOCOMPLETE_BRACKETS};
 use crate::lsp_structs::{DidChangeNotification, TextDocumentContentChangeEvent, 
                     VersionedTextDocumentIdentifier, SemanticTokenTypes, CppSemanticTokenTypes, 
                     RustSemanticTokenTypes, RustSemanticTokenModifiers};
-use crate::language_support::{CPP_LANGUAGE_IDENTIFIER, RUST_LANGUAGE_IDENTIFIER, highlight_text};
+use crate::language_support::{CPP_LANGUAGE_IDENTIFIER, RUST_LANGUAGE_IDENTIFIER, LexicalHighlights, highlight_text};
 use crate::renderer::TextRenderer;
+use crate::text_utils;
 
-use core::ops::RangeBounds;
 use std::{
     cell::RefCell,
     char,
@@ -46,13 +46,6 @@ pub enum SelectionMode {
 pub enum MouseSelectionMode {
     Click,
     Move
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub enum CharType {
-    Word,
-    Punctuation,
-    Linebreak
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -435,27 +428,57 @@ impl TextBuffer {
     pub fn insert_newline(&mut self) -> DidChangeNotification {
         let offset = self.get_leading_whitespace_offset();
 
-        // If we're opening a bracket, insert a <TAB>s worth of indentation
-        // on the next line
-        if let Some(prev_char) = self.buffer.chars_at(self.get_caret_absolute_pos()).prev() {
-            for brackets in &AUTOCOMPLETE_BRACKETS {
-                if brackets[0] == prev_char {
-                    let change_notification = self.insert_chars(
-                        format!("{}{}{}{}{}{}", 
-                            "\r\n", 
-                            " ".repeat(offset),
-                            " ".repeat(NUMBER_OF_SPACES_PER_TAB),
-                            "\r\n",
-                            " ".repeat(offset),
-                            brackets[1],
-                        ).as_str());
-                    self.set_selection(SelectionMode::Left, offset + 3, false);
-                    return change_notification;
+        // Search back for an open bracket, to see if auto indentation might
+        // be necessary
+        let mut chars = self.buffer.chars_at(self.get_caret_absolute_pos());
+        while let Some(prev_char) = chars.prev() {
+            if let Some(brackets) = text_utils::is_opening_bracket(prev_char) {
+                // If we can find a matching bracket separated only by whitespace
+                // then we will insert double newlines and insert the cursor
+                // in the middle of the new scope
+                for next_char in self.buffer.chars_at(self.get_caret_absolute_pos()) {
+                    if next_char == brackets.1 {
+                        let change_notification = self.insert_chars(
+                            format!("{}{}{}{}{}", 
+                                "\r\n", 
+                                " ".repeat(offset),
+                                " ".repeat(NUMBER_OF_SPACES_PER_TAB),
+                                "\r\n",
+                                " ".repeat(offset)
+                            ).as_str());
+                        self.set_selection(SelectionMode::Left, offset + 2, false);
+                        return change_notification;
+                    }
+                    else if text_utils::is_whitespace(next_char) {
+                        continue;
+                    }
+                    break;
                 }
+
+                // If no matching bracket is found, simply insert a new line
+                // and indent NUMBER_OF_SPACES_PER_TAB extra for the new scope
+                let change_notification = self.insert_chars(
+                    format!("{}{}{}", "\r\n", " ".repeat(offset), 
+                    " ".repeat(NUMBER_OF_SPACES_PER_TAB)).as_str());
+                return change_notification;
             }
+            if text_utils::is_whitespace(prev_char) {
+                continue;
+            }
+            break;
         }
 
         self.insert_chars(format!("{}{}", "\r\n", " ".repeat(offset)).as_str())
+    }
+
+    pub fn insert_bracket(&mut self, bracket_pair: (char, char)) -> DidChangeNotification {
+        // When inserting an opening bracket,
+        // we will insert its corresponding closing bracket 
+        // next to it.
+        let did_change_notification = 
+            self.insert_chars(format!("{}{}", bracket_pair.0, bracket_pair.1).as_str());
+        self.set_selection(SelectionMode::Left, 1, false);
+        did_change_notification
     }
 
     pub fn insert_chars(&mut self, chars: &str) -> DidChangeNotification {
@@ -473,6 +496,7 @@ impl TextBuffer {
         self.buffer.insert(caret_absolute_pos, chars);
         self.set_selection(SelectionMode::Right, chars.len(), false);
         self.preserve_semantic_line_highlights(line, self.get_current_line());
+        self.update_view();
 
         let change_event = TextDocumentContentChangeEvent::new_insert_event(chars.to_owned(), line, char_pos, line, char_pos);
         changes.push(change_event);
@@ -481,22 +505,47 @@ impl TextBuffer {
 
     pub fn insert_char(&mut self, character: u16) -> DidChangeNotification {
         let mut changes = Vec::new();
+        let chr = (character as u8) as char;
 
         // If we are currently selecting text, 
         // delete text before insertion
         if self.get_caret_absolute_pos() != self.caret_char_anchor {
             changes.push(self.delete_selection());
         }
+
+        for brackets in &AUTOCOMPLETE_BRACKETS {
+            if chr == brackets.0 {
+                return self.insert_bracket(*brackets);
+            }
+            // Special case when inserting a closing bracket
+            // while the caret is next to closing bracket. Simply
+            // advance the caret position once
+            if chr == brackets.1 {
+                if self.buffer.char(self.get_caret_absolute_pos()) == brackets.1 {
+                    self.set_selection(SelectionMode::Right, 1, false);
+                    return DidChangeNotification::new(self.next_versioned_identifer(), changes);
+                }
+                // Otherwise if possible move the scope indent back once
+                else {
+                    let offset = self.get_leading_whitespace_offset();
+                    if offset >= NUMBER_OF_SPACES_PER_TAB {
+                        self.set_selection(SelectionMode::Left, NUMBER_OF_SPACES_PER_TAB, true);
+                        changes.push(self.delete_selection());
+                    }
+                }
+            }
+        }
+
         let caret_absolute_pos = self.get_caret_absolute_pos();
         let line = self.buffer.char_to_line(caret_absolute_pos);
         let char_pos = caret_absolute_pos - self.buffer.line_to_char(line);
 
-        self.buffer.insert_char(caret_absolute_pos, (character as u8) as char);
+        self.buffer.insert_char(caret_absolute_pos, chr);
         self.set_selection(SelectionMode::Right, 1, false);
         self.preserve_semantic_char_highlights(line, char_pos);
+        self.update_view();
 
-        let change_event = TextDocumentContentChangeEvent::new_insert_event(
-            ((character as u8) as char).to_string(), line, char_pos, line, char_pos);
+        let change_event = TextDocumentContentChangeEvent::new_insert_event(chr.to_string(), line, char_pos, line, char_pos);
 
         changes.push(change_event);
         DidChangeNotification::new(self.next_versioned_identifer(), changes)
@@ -519,7 +568,7 @@ impl TextBuffer {
         if self.see_chars("\r\n") { 
             offset = 2 
         }
-        else if self.see_prev_chars(" ".repeat(NUMBER_OF_SPACES_PER_TAB).as_str()) {
+        else if self.see_chars(" ".repeat(NUMBER_OF_SPACES_PER_TAB).as_str()) {
             offset = NUMBER_OF_SPACES_PER_TAB;
         }
 
@@ -603,10 +652,15 @@ impl TextBuffer {
 
     // Parses and creates ranges of highlight information directly
     // from the text buffer displayed on the screen
-    pub fn get_lexical_highlights(&mut self) -> Vec<(DWRITE_TEXT_RANGE, SemanticTokenTypes)> {
-        let text_in_current_view = self.buffer.slice(self.absolute_char_pos_start..self.absolute_char_pos_end).to_string();
+    pub fn get_lexical_highlights(&mut self) -> LexicalHighlights {
+        let text_in_current_view = self.get_text_view_as_string();
         let start_it = self.buffer.chars_at(self.absolute_char_pos_start);
-        highlight_text(text_in_current_view.as_str(), self.language_identifier, start_it)
+
+        let caret_pos_in_view = self.get_caret_absolute_pos()
+                                    .clamp(self.absolute_char_pos_start, self.absolute_char_pos_end)
+                                    .saturating_sub(self.absolute_char_pos_start);
+
+        highlight_text(text_in_current_view.as_str(), caret_pos_in_view, self.language_identifier, start_it)
     }
 
     // Processes the semantic tokens received from the language server
@@ -717,7 +771,7 @@ impl TextBuffer {
             if OpenClipboard(hwnd) > 0 {
                 if EmptyClipboard() > 0 {
                     let data = self.get_selection_data();
-                    if data.len() == 0 {
+                    if data.is_empty() {
                         CloseClipboard();
                         return;
                     }
@@ -829,7 +883,7 @@ impl TextBuffer {
     }
 
     pub fn get_text_layout(&mut self) -> (*mut IDWriteTextLayout, D2D1_LAYER_PARAMETERS) {
-        let lines = self.get_current_lines();
+        let lines = self.get_text_view_as_utf16();
 
         unsafe {
             if !self.text_layout.is_null() {
@@ -911,13 +965,9 @@ impl TextBuffer {
         self.buffer.char_to_line(self.get_caret_absolute_pos())
     }
 
-    pub fn get_current_lines(&self) -> Vec<u16> {
-        self.text_range(self.absolute_char_pos_start..self.absolute_char_pos_end)
-    }
-
     fn next_versioned_identifer(&mut self) -> VersionedTextDocumentIdentifier {
         self.lsp_versioned_identifier.version += 1;
-        return self.lsp_versioned_identifier.clone();
+        self.lsp_versioned_identifier.clone()
     }
 
     // Adds potential newlines to the temporary edits to preserve
@@ -970,10 +1020,8 @@ impl TextBuffer {
             }
             let length = self.semantic_tokens[i + 2];
 
-            if line == (line_pos as u32) {
-                if (start + length) == (char_pos_in_line as u32) {
-                    self.semantic_tokens[i + 2] += 1;
-                }
+            if line == (line_pos as u32) && (start + length) == (char_pos_in_line as u32) {
+                self.semantic_tokens[i + 2] += 1;
             }
 
             i += 5;
@@ -1031,7 +1079,7 @@ impl TextBuffer {
     }
 
     fn update_line_numbers_margin(&mut self) {
-        let end_line_max_digits = Self::get_digits_in_number(self.buffer.len_lines() as u32);
+        let end_line_max_digits = text_utils::get_digits_in_number(self.buffer.len_lines() as u32);
         let font_width = self.renderer.borrow().font_width;
         self.line_numbers_margin = (end_line_max_digits as f32).mul_add(font_width, font_width / 2.0)
     }
@@ -1109,26 +1157,12 @@ impl TextBuffer {
         }
     }
 
-    // Underscore is treated as part of a word to make movement
-    // programming in snake_case easier
-    fn is_word(chr: char) -> bool {
-        chr.is_alphanumeric() || chr == '_'
-    }
-
-    fn get_char_type(chr: char) -> CharType {
-        match chr {
-            x if Self::is_word(x) => CharType::Word,
-            x if Self::is_linebreak(x) => CharType::Linebreak,
-            _ => CharType::Punctuation
-        }
-    }
-
     // Gets the amount of leading whitespace on the current line.
     // To help with auto indentation
     fn get_leading_whitespace_offset(&self) -> usize {
-        let mut line_slice = self.buffer.line(self.buffer.char_to_line(self.get_caret_absolute_pos())).chars();
+        let line_slice = self.buffer.line(self.buffer.char_to_line(self.get_caret_absolute_pos())).chars();
         let mut offset = 0;
-        while let Some(chr) = line_slice.next() {
+        for chr in line_slice {
             match chr {
                 ' ' => offset += 1,
                 '\t' => offset += NUMBER_OF_SPACES_PER_TAB,
@@ -1152,9 +1186,9 @@ impl TextBuffer {
                 if caret_absolute_pos == self.buffer.len_chars() {
                     return 0;
                 }
-                let current_char_type = Self::get_char_type(self.buffer.char(self.caret_char_pos));
+                let current_char_type = text_utils::get_char_type(self.buffer.char(self.caret_char_pos));
                 for chr in self.buffer.chars_at(self.get_caret_absolute_pos()) {
-                    if Self::get_char_type(chr) != current_char_type {
+                    if text_utils::get_char_type(chr) != current_char_type {
                         break;
                     }
                     count += 1;
@@ -1164,10 +1198,10 @@ impl TextBuffer {
                 if caret_absolute_pos == 0 {
                     return 0;
                 }
-                let current_char_type = Self::get_char_type(self.buffer.char(self.caret_char_pos));
+                let current_char_type = text_utils::get_char_type(self.buffer.char(self.caret_char_pos));
                 let mut chars = self.buffer.chars_at(self.caret_char_pos);
                 while let Some(chr) = chars.prev() {
-                    if Self::get_char_type(chr) != current_char_type {
+                    if text_utils::get_char_type(chr) != current_char_type {
                         break;
                     }
                     count += 1;
@@ -1178,29 +1212,13 @@ impl TextBuffer {
         count
     }
 
-    fn text_range<R>(&self, char_range: R) -> Vec<u16> where R: RangeBounds<usize> {
-        let rope_slice = self.buffer.slice(char_range);
+    pub fn get_text_view_as_string(&self) -> String {
+        self.buffer.slice(self.absolute_char_pos_start..self.absolute_char_pos_end).to_string()
+    }
+
+    fn get_text_view_as_utf16(&self) -> Vec<u16> {
+        let rope_slice = self.buffer.slice(self.absolute_char_pos_start..self.absolute_char_pos_end);
         let chars: Vec<u8> = rope_slice.bytes().collect();
         OsStr::new(str::from_utf8(chars.as_ref()).unwrap()).encode_wide().chain(once(0)).collect()
-    }
-
-    fn get_digits_in_number(number: u32) -> u32 {
-        match number {
-            0..=9 => 1,
-            10..=99 => 2,
-            100..=999 => 3,
-            1000..=9999 => 4,
-            10000..=99999 => 5,
-            100000..=999999 => 6,
-            1000000..=9999999 => 7,
-            10000000..=99999999 => 8,
-            100000000..=999999999 => 9,
-            1000000000..=4294967295 => 10
-        }
-    }
-
-    fn is_linebreak(chr: char) -> bool {
-        chr == '\n' || chr == '\r' || chr == '\u{000B}' || chr == '\u{000C}' || 
-        chr == '\u{0085}' || chr == '\u{2028}' || chr == '\u{2029}'
     }
 }

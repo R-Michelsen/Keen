@@ -18,7 +18,7 @@ use winapi::{
         dwrite::{
             DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat, 
             IDWriteTextLayout, DWRITE_WORD_WRAPPING_NO_WRAP,
-            DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_WEIGHT_NORMAL, 
+            DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_WEIGHT_NORMAL,
             DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
             DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
             DWRITE_TEXT_RANGE, DWRITE_HIT_TEST_METRICS
@@ -289,7 +289,41 @@ impl TextRenderer {
             (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
 
         }
+    }
 
+    fn draw_enclosing_brackets(&self, origin: (f32, f32), text_layout: *mut IDWriteTextLayout, enclosing_bracket_positions: [usize; 2]) {
+        unsafe {
+            let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
+            (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+
+            for bracket_pos in &enclosing_bracket_positions {
+                let mut dummy = (0.0, 0.0);
+                dx_ok!((*text_layout).HitTestTextPosition(
+                    *bracket_pos as u32,
+                    false as i32,
+                    &mut dummy.0,
+                    &mut dummy.1,
+                    metrics_uninit.as_mut_ptr(),
+                ));
+                let metrics = metrics_uninit.assume_init();
+    
+                let highlight_rect = D2D1_RECT_F {
+                    left: origin.0 + metrics.left,
+                    top: origin.1 + metrics.top,
+                    right: origin.0 + metrics.left + metrics.width,
+                    bottom: origin.1 + metrics.top + metrics.height
+                };
+    
+                (*self.target).DrawRectangle(
+                    &highlight_rect, 
+                    self.theme.bracket_brush as *mut ID2D1Brush, 
+                    self.theme.bracket_rect_width, 
+                    null_mut()
+                );
+            }
+
+            (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        }
     }
 
     pub fn draw(&self, text_buffer: &mut TextBuffer, draw_caret: bool) {
@@ -322,7 +356,7 @@ impl TextRenderer {
             // In case of overlap, lexical highlights trump semantic for now.
             // This is to ensure that commenting out big sections of code happen
             // instantaneously
-            for (range, token_type) in semantic_highlights.into_iter().chain(lexical_highlights) {
+            for (range, token_type) in semantic_highlights.into_iter().chain(lexical_highlights.highlight_tokens) {
                 match token_type {
                     SemanticTokenTypes::None | SemanticTokenTypes::Variable          
                                                           => {},
@@ -343,6 +377,9 @@ impl TextRenderer {
 
             if let Some(selection_range) = text_buffer.get_selection_range() {
                 self.draw_selection_range(view_origin, text_layout, selection_range);
+            }
+            if let Some(enclosing_bracket_ranges) = lexical_highlights.enclosing_brackets {
+                self.draw_enclosing_brackets(view_origin, text_layout, enclosing_bracket_ranges)
             }
 
             (*self.target).DrawTextLayout(

@@ -1,6 +1,7 @@
 use winapi::um::dwrite::DWRITE_TEXT_RANGE;
 use ropey::iter::Chars;
 use crate::lsp_structs::SemanticTokenTypes;
+use crate::text_utils;
 
 pub const CPP_KEYWORDS: [&str; 92] = ["alignas", "alignof", "and", "and_eq", "asm", 
 "auto", "bitand", "bitor", "bool", "break", "case", "catch", "char", "char8_t", 
@@ -35,8 +36,13 @@ fn new_range(start: usize, length: usize) -> DWRITE_TEXT_RANGE {
     }
 }
 
-pub fn highlight_text(text: &str, language_identifier: &'static str, mut start_it: Chars) -> Vec<(DWRITE_TEXT_RANGE, SemanticTokenTypes)> {
-    let mut highlights = Vec::new();
+pub struct LexicalHighlights {
+    pub highlight_tokens: Vec<(DWRITE_TEXT_RANGE, SemanticTokenTypes)>,
+    pub enclosing_brackets: Option<[usize; 2]>
+}
+
+pub fn highlight_text(text: &str, caret_pos: usize, language_identifier: &'static str, mut start_it: Chars) -> LexicalHighlights {
+    let mut highlight_tokens = Vec::new();
 
     // Singleline and multiline comments style
     // can convert to a match statement 
@@ -59,9 +65,10 @@ pub fn highlight_text(text: &str, language_identifier: &'static str, mut start_i
     while let Some(chr) = start_it.prev() {
         if chr == do_match[index0] {
             index0 += 1;
-            // Found a match, the first line is inside a multiline comment
+            // If we found a match, the first line is inside a multiline comment
             if index0 == length0 {
                 inside_comment = true;
+                break;
             }
         }
         else {
@@ -69,8 +76,8 @@ pub fn highlight_text(text: &str, language_identifier: &'static str, mut start_i
         }
         if chr == dont_match[index1] {
             index1 += 1;
+            // If a closing bracket was found first, return
             if index1 == length1 {
-                // A closing bracket was found first, return
                 break;
             }
         }
@@ -84,22 +91,20 @@ pub fn highlight_text(text: &str, language_identifier: &'static str, mut start_i
     while offset < text.len() {
         let slice = unsafe { text.get_unchecked(offset..text.len()) };
         // If we run into a multiline comment ending,
-        // we need to look back and find its counterpart
-        // if there is one.
-        if slice.starts_with(ml_comment[1]) {
-            if inside_comment {
-                highlights.push((new_range(0, offset + 2), SemanticTokenTypes::Comment));
-                inside_comment = false;
-            }
+        // insert a comment if the start of the view 
+        // was already inside a multiline comment
+        if slice.starts_with(ml_comment[1]) && inside_comment {
+            highlight_tokens.push((new_range(0, offset + 2), SemanticTokenTypes::Comment));
+            inside_comment = false;
         }
         else if slice.starts_with(ml_comment[0]) {
             if let Some(mlc_end) = slice.find(ml_comment[1]) {
-                highlights.push((new_range(offset, mlc_end + 2), SemanticTokenTypes::Comment));
+                highlight_tokens.push((new_range(offset, mlc_end + 2), SemanticTokenTypes::Comment));
                 offset += mlc_end + 2;
                 continue;
             }
             else {
-                highlights.push((new_range(offset, text.len() - offset), SemanticTokenTypes::Comment));
+                highlight_tokens.push((new_range(offset, text.len() - offset), SemanticTokenTypes::Comment));
                 break;
             }
         }
@@ -116,18 +121,18 @@ pub fn highlight_text(text: &str, language_identifier: &'static str, mut start_i
                 }
                 string_offset += 1;
             }
-            highlights.push((new_range(offset, string_offset + 1), SemanticTokenTypes::Literal));
+            highlight_tokens.push((new_range(offset, string_offset + 1), SemanticTokenTypes::Literal));
             offset += string_offset + 1;
         }
         else if slice.starts_with(sl_comment) {
             // Find the number of bytes until the next newline
             if let Some(newline_offset) = slice.find(|c: char| c == '\n' || c == '\r') {
-                highlights.push((new_range(offset, newline_offset), SemanticTokenTypes::Comment));
+                highlight_tokens.push((new_range(offset, newline_offset), SemanticTokenTypes::Comment));
                 offset += newline_offset;
                 continue;
             }
             else {
-                highlights.push((new_range(offset, text.len() - offset), SemanticTokenTypes::Comment));
+                highlight_tokens.push((new_range(offset, text.len() - offset), SemanticTokenTypes::Comment));
             }
         }
         else if slice.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '#') {
@@ -140,14 +145,13 @@ pub fn highlight_text(text: &str, language_identifier: &'static str, mut start_i
                 _ => false
             };
             if keyword_match {
-                highlights.push((new_range(offset - identifier.len(), identifier.len()), SemanticTokenTypes::Keyword));
+                highlight_tokens.push((new_range(offset - identifier.len(), identifier.len()), SemanticTokenTypes::Keyword));
             }
             else if language_identifier == CPP_LANGUAGE_IDENTIFIER && identifier.starts_with('#') {
-                highlights.push((new_range(offset - identifier.len(), identifier.len()), SemanticTokenTypes::Preprocessor));
+                highlight_tokens.push((new_range(offset - identifier.len(), identifier.len()), SemanticTokenTypes::Preprocessor));
             }
             identifier = String::from("");
-        }
-        
+        }        
         offset += 1;
     }
 
@@ -155,8 +159,68 @@ pub fn highlight_text(text: &str, language_identifier: &'static str, mut start_i
     // a comment and no match was found, the entire
     // view is inside a comment
     if inside_comment {
-        return vec![(new_range(0, text.len()), SemanticTokenTypes::Comment)];
+        return LexicalHighlights {
+            highlight_tokens: vec![(new_range(0, text.len()), SemanticTokenTypes::Comment)],
+            enclosing_brackets: None
+        };
     }
 
-    highlights
+    // Closure to figure out if a text offset is inside a comment.
+    // Used when searching for matching bracket pairs
+    let contained_in_comments = |offset: u32| -> bool {
+        for token in &highlight_tokens {
+            let range = token.0.startPosition..(token.0.startPosition + token.0.length);
+            if token.1 == SemanticTokenTypes::Comment && range.contains(&offset) {
+                return true;
+            }
+        }
+        false
+    };
+
+    let mut brackets_to_match = ('\0', '\0');
+    let mut bracket_open_pos = 0;
+    let mut brackets_offset = 0;
+    // Find enclosing brackets
+    for (offset, chr) in text.chars().enumerate() {
+        if let Some(brackets) = text_utils::is_opening_bracket(chr) {
+            if contained_in_comments(offset as u32) {
+                continue;
+            }
+            if offset < caret_pos {
+                if brackets != brackets_to_match {
+                    brackets_to_match = brackets;
+                    brackets_offset = 0;
+                }
+                bracket_open_pos = offset;
+            }
+            else {
+                if brackets == brackets_to_match {
+                    brackets_offset += 1;
+                }
+            }
+        }
+        else if let Some(brackets) = text_utils::is_closing_bracket(chr) {
+            if contained_in_comments(offset as u32) {
+                continue;
+            }
+            if offset >= caret_pos {
+                if brackets.1 == brackets_to_match.1 {
+                    if brackets_offset == 0 {
+                        return LexicalHighlights {
+                            highlight_tokens,
+                            enclosing_brackets: Some([bracket_open_pos, offset])
+                        };
+                    }
+                    else {
+                        brackets_offset -= 1;
+                    }
+                }
+            }
+        }
+    }
+
+    LexicalHighlights {
+        highlight_tokens,
+        enclosing_brackets: None
+    }
 }

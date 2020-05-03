@@ -1,5 +1,6 @@
 #![feature(new_uninit)]
 #![feature(const_fn)]
+#![feature(clamp)]
 #![windows_subsystem = "console"]
 
 mod editor;
@@ -10,6 +11,7 @@ mod lsp_client;
 mod lsp_structs;
 mod settings;
 mod language_support;
+mod text_utils;
 
 use editor::{ Editor, EditorCommand };
 use settings::MAX_LSP_RESPONSE_SIZE;
