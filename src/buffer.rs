@@ -1180,7 +1180,7 @@ impl TextBuffer {
         offset
     }
 
-    // Finds the number of characters until a boundary
+    // Finds the number of characters until a boundary is hit.
     // A boundary is defined to be punctuation when the
     // current char is inside a word, and alphanumeric otherwise.
     fn get_boundary_char_count(&self, search_direction: CharSearchDirection) -> usize {
