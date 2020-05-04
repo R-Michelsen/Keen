@@ -12,8 +12,8 @@ use crate::settings::{SCROLL_LINES_PER_MOUSEMOVE, SCROLL_LINES_PER_ROLL,
     NUMBER_OF_SPACES_PER_TAB, SCROLL_ZOOM_FACTOR};
 use crate::renderer::TextRenderer;
 use crate::lsp_client::{LSPClient, LSPRequestType};
-use crate::lsp_structs::{SemanticTokenResult, GenericNotification, GenericRequest, 
-    GenericResponse, DidChangeNotification, ResponseError, ErrorCodes};
+use crate::lsp_structs::{GenericNotification, GenericRequest, GenericResponse, 
+    DidChangeNotification, ResponseError, SemanticTokenResult, ErrorCodes};
 use crate::language_support::{CPP_FILE_EXTENSIONS, CPP_LSP_SERVER, CPP_LANGUAGE_IDENTIFIER, 
     RUST_LSP_SERVER, RUST_FILE_EXTENSIONS, RUST_LANGUAGE_IDENTIFIER};
 use crate::buffer::{TextBuffer, SelectionMode, MouseSelectionMode};
@@ -149,7 +149,7 @@ impl Editor {
     fn handle_response_error(&mut self, request_type: LSPRequestType, response_error: &ResponseError) {
         match request_type {
             LSPRequestType::InitializationRequest(_) => {},
-            LSPRequestType::SemanticTokenRequest(uri) => {
+            LSPRequestType::SemanticTokensRequest(uri) => {
                 // If the semantic token request fails
                 // due to content changed, send a new one
                 if ErrorCodes::from_i64((*response_error).code) == ErrorCodes::ContentModified {
@@ -187,7 +187,7 @@ impl Editor {
                     lsp_client.send_did_open_notification(file_prefix.clone() + path.as_str(), language_identifier.to_owned(), text);
                     lsp_client.send_semantic_token_request(file_prefix + path.as_str());
                 },
-                LSPRequestType::SemanticTokenRequest(uri) => {
+                LSPRequestType::SemanticTokensRequest(uri) => {
                     // Get the buffer for which the semantic token request was issued
                     let buffer = self.buffers.get_mut(&uri).unwrap();
     

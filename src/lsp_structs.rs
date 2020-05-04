@@ -363,7 +363,7 @@ pub struct VersionedTextDocumentIdentifier {
     pub version: i64
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Position {
     pub line: i64,
@@ -379,7 +379,7 @@ impl Position {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Range {
     pub start: Position,
@@ -844,6 +844,13 @@ pub struct GenericResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SemanticTokenResult {
+    pub result_id: Option<String>,
+    pub data: Vec<u32>
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticTokenRangeResult {
     pub result_id: Option<String>,
     pub data: Vec<u32>
 }

@@ -1,6 +1,6 @@
 use crate::language_support::{CPP_LSP_SERVER, RUST_LSP_SERVER};
 use crate::lsp_structs::{ClangdInitializationOptions, InitializeRequest, InitializeParams, 
-    ClientInfo, ClientCapabilities, TextDocumentClientCapabilities, SemanticTokensRequest, 
+    ClientInfo, ClientCapabilities, TextDocumentClientCapabilities, SemanticTokensRequest,
     DidOpenNotification, InitializeNotification, DidChangeNotification};
 use crate::WM_LSP_RESPONSE;
 use crate::WM_LSP_CRASH;
@@ -19,7 +19,7 @@ use serde_json::to_value;
 #[derive(Clone, Debug)]
 pub enum LSPRequestType {
     InitializationRequest(String),
-    SemanticTokenRequest(String)
+    SemanticTokensRequest(String)
 }
 
 #[derive(Debug)]
@@ -151,7 +151,7 @@ impl LSPClient {
     pub fn send_did_open_notification(&mut self, uri: String, language_id: String, text: String) {
         let did_open_notification = DidOpenNotification::new(uri, language_id, text);
         let serialized_did_open_notification = serde_json::to_string(&did_open_notification).unwrap();
-        
+
         self.send_notification(serialized_did_open_notification.as_str());
     }
 
@@ -159,7 +159,7 @@ impl LSPClient {
         let semantic_token_request = SemanticTokensRequest::new(self.request_id, uri.clone());
 
         let serialized_semantic_token_request = serde_json::to_string(&semantic_token_request).unwrap();
-        self.send_request(serialized_semantic_token_request.as_str(), LSPRequestType::SemanticTokenRequest(uri));
+        self.send_request(serialized_semantic_token_request.as_str(), LSPRequestType::SemanticTokensRequest(uri));
     }
 
     pub fn send_initialize_request(&mut self, path: String) {

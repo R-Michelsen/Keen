@@ -88,8 +88,8 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, (*uninit_editor).as_mut_ptr() as isize);
         editor = (*uninit_editor).as_mut_ptr();
         // (*editor).open_file("C:/Users/Rasmus/Desktop/Yarr/source/AppEditorLogic.cpp");
-        (*editor).open_file("C:/llvm-project/clang/lib/CodeGen/CGBuiltin.cpp");
-        // (*editor).open_file("C:/Users/Rasmus/Desktop/Keen/src/editor.rs");
+        // (*editor).open_file("C:/llvm-project/clang/lib/CodeGen/CGBuiltin.cpp");
+        (*editor).open_file("C:/Users/Rasmus/Desktop/Keen/src/editor.rs");
     }
     else {
         editor = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Editor;

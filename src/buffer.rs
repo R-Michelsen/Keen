@@ -2,7 +2,7 @@ use crate::dx_ok;
 use crate::settings::{NUMBER_OF_SPACES_PER_TAB, AUTOCOMPLETE_BRACKETS};
 use crate::lsp_structs::{DidChangeNotification, TextDocumentContentChangeEvent, 
                     VersionedTextDocumentIdentifier, SemanticTokenTypes, CppSemanticTokenTypes, 
-                    RustSemanticTokenTypes, RustSemanticTokenModifiers};
+                    RustSemanticTokenTypes, RustSemanticTokenModifiers, Range, Position};
 use crate::language_support::{CPP_LANGUAGE_IDENTIFIER, RUST_LANGUAGE_IDENTIFIER, LexicalHighlights, highlight_text};
 use crate::renderer::TextRenderer;
 use crate::text_utils;
