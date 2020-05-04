@@ -170,6 +170,13 @@ impl Editor {
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
+        self.layout = EditorLayout::new(
+            self.renderer.borrow().pixel_size.width as f32,
+            self.renderer.borrow().pixel_size.height as f32,
+            self.renderer.borrow().font_height);
+
+        self.status_bar.resize(self.layout.status_bar_origin, self.layout.status_bar_extents);
+
         self.renderer.borrow_mut().resize(width, height);
         for buffer in self.buffers.values_mut() {
             buffer.on_refresh_metrics(

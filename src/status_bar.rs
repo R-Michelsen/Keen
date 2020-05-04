@@ -27,6 +27,11 @@ impl StatusBar {
         }
     }
 
+    pub fn resize(&mut self, origin: (f32, f32), extents: (f32, f32)) {
+        self.origin = origin;
+        self.extents = extents;
+    }
+
     pub fn get_layout(&mut self, text: &str) -> *mut IDWriteTextLayout {
         unsafe {
             if !self.text_layout.is_null() {
