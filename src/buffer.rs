@@ -68,6 +68,7 @@ pub struct TextBuffer {
     pub line_numbers_origin: (f32, f32),
     pub line_numbers_extents: (f32, f32),
     pub line_numbers_margin: f32,
+    pub line_numbers_max_digits: u32,
 
     // The selection state of the buffer should be public
     // for the editor to use
@@ -126,6 +127,7 @@ impl TextBuffer {
             line_numbers_origin: (0.0, 0.0),
             line_numbers_extents: (0.0, 0.0),
             line_numbers_margin: 0.0,
+            line_numbers_max_digits: 0,
 
             currently_selecting: false,
 
@@ -933,6 +935,12 @@ impl TextBuffer {
     }
 
     pub fn on_editor_action(&mut self) {
+        // Full update if number of lines have exceeded a "digit-boundary"
+        if self.line_numbers_max_digits != text_utils::get_digits_in_number(self.buffer.len_lines() as u32) {
+            self.on_editor_refresh_metrics();
+            return;
+        }
+
         // In theory for some actions such as selecting text
         // the absolute char positions need not be updated. However,
         // for readability and code flexibility reasons we will do it 
@@ -941,7 +949,7 @@ impl TextBuffer {
         self.update_absolute_char_positions();
     }
 
-    pub fn on_font_change(&mut self) {
+    pub fn on_editor_refresh_metrics(&mut self) {
         self.update_line_numbers_margin();
         self.update_text_region();
         self.update_numbers_region();
@@ -1080,9 +1088,9 @@ impl TextBuffer {
     }
 
     fn update_line_numbers_margin(&mut self) {
-        let end_line_max_digits = text_utils::get_digits_in_number(self.buffer.len_lines() as u32);
+        self.line_numbers_max_digits = text_utils::get_digits_in_number(self.buffer.len_lines() as u32);
         let font_width = self.renderer.borrow().font_width;
-        self.line_numbers_margin = (end_line_max_digits as f32).mul_add(font_width, font_width / 2.0)
+        self.line_numbers_margin = (self.line_numbers_max_digits as f32).mul_add(font_width, font_width / 2.0)
     }
 
     fn update_text_region(&mut self) {

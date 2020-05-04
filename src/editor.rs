@@ -262,7 +262,7 @@ impl Editor {
                     match ctrl_down {
                         true => {
                             self.renderer.borrow_mut().update_text_format(SCROLL_ZOOM_FACTOR);
-                            buffer.on_font_change();
+                            buffer.on_editor_refresh_metrics();
                         },
                         false => buffer.scroll_up(SCROLL_LINES_PER_ROLL)
                     }
@@ -272,7 +272,7 @@ impl Editor {
                     match ctrl_down {
                         true => {
                             self.renderer.borrow_mut().update_text_format(-SCROLL_ZOOM_FACTOR);
-                            buffer.on_font_change();
+                            buffer.on_editor_refresh_metrics();
                         },
                         false => buffer.scroll_down(SCROLL_LINES_PER_ROLL)
                     }
