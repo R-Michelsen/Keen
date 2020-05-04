@@ -12,6 +12,7 @@ mod lsp_structs;
 mod settings;
 mod language_support;
 mod text_utils;
+mod status_bar;
 
 use editor::{ Editor, EditorCommand };
 use settings::MAX_LSP_RESPONSE_SIZE;

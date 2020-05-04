@@ -1,10 +1,20 @@
 use crate::settings::AUTOCOMPLETE_BRACKETS;
 
+use std::{
+    ffi::OsStr,
+    iter::once,
+    os::windows::ffi::OsStrExt
+};
+
 #[derive(Clone, Copy, PartialEq)]
 pub enum CharType {
     Word,
     Punctuation,
     Linebreak
+}
+
+pub fn to_os_str(chars: &str) -> Vec<u16> {
+    OsStr::new(chars).encode_wide().chain(once(0)).collect()
 }
 
 pub fn get_char_type(chr: char) -> CharType {
@@ -53,6 +63,7 @@ pub fn is_opening_bracket(chr: char) -> Option<(char, char)> {
     }
     None
 }
+
 pub fn is_closing_bracket(chr: char) -> Option<(char, char)> {
     for bracket in &AUTOCOMPLETE_BRACKETS {
         if chr == bracket.1 {

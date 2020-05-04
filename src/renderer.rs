@@ -1,6 +1,8 @@
 use crate::settings;
 use crate::buffer::TextBuffer;
+use crate::editor::EditorLayout;
 use crate::theme::Theme;
+use crate::status_bar::StatusBar;
 use crate::lsp_structs::SemanticTokenTypes;
 
 use std::{
@@ -331,7 +333,7 @@ impl TextRenderer {
         }
     }
 
-    pub fn draw(&self, text_buffer: &mut TextBuffer, draw_caret: bool) {
+    pub fn draw(&self, editor_layout: &EditorLayout, text_buffer: &mut TextBuffer, status_bar: &mut StatusBar, draw_caret: bool) {
         unsafe {
             (*self.target).BeginDraw();
 
@@ -405,6 +407,26 @@ impl TextRenderer {
                 }
             }
             (*self.target).PopLayer();
+
+            let status_bar_rect = D2D1_RECT_F {
+                left: (*editor_layout).status_bar_origin.0,
+                top: (*editor_layout).status_bar_origin.1,
+                right: (*editor_layout).status_bar_origin.0 + (*editor_layout).status_bar_extents.0,
+                bottom: (*editor_layout).status_bar_origin.1 + (*editor_layout).status_bar_extents.1,
+            };
+            (*self.target).FillRectangle(&status_bar_rect, self.theme.status_bar_brush as *mut ID2D1Brush);
+
+            let status_bar_layout = status_bar.get_layout(text_buffer.path.as_str());
+
+            (*self.target).DrawTextLayout(
+                D2D1_POINT_2F {
+                    x: (*editor_layout).status_bar_origin.0,
+                    y: (*editor_layout).status_bar_origin.1
+                },
+                status_bar_layout,
+                self.theme.text_brush as *mut ID2D1Brush,
+                D2D1_DRAW_TEXT_OPTIONS_NONE
+            );
 
             (*self.target).EndDraw(null_mut(), null_mut());
         }

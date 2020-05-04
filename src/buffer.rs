@@ -57,6 +57,8 @@ pub enum CharSearchDirection {
 pub struct TextBuffer {
     buffer: Rope,
 
+    pub path: String,
+
     // The layout of the text buffer should be public for
     // the renderer to use
     pub origin: (f32, f32),
@@ -117,6 +119,7 @@ impl TextBuffer {
 
         let mut text_buffer = Self {
             buffer,
+            path: String::from(path),
 
             origin,
             extents,
@@ -161,7 +164,7 @@ impl TextBuffer {
             semantic_tokens: Vec::new()
         };
 
-        text_buffer.on_window_resize(origin, extents);
+        text_buffer.on_refresh_metrics(origin, extents);
         text_buffer
     }
 
@@ -258,6 +261,11 @@ impl TextBuffer {
 
         // Reset the cached width
         self.cached_char_offset = 0;
+
+        // Left-click will scroll down once if on the last line
+        if self.bot_line == self.get_current_line() {
+            self.scroll_down(1)
+        }
     }
 
     pub fn left_double_click(&mut self, mouse_pos: (f32, f32)) {
@@ -272,6 +280,11 @@ impl TextBuffer {
 
         // Set the anchor position at the left edge
         self.caret_char_anchor = self.caret_char_pos - (left_count + right_count);
+
+        // Left-click will scroll down once if on the last line
+        if self.bot_line == self.get_current_line() {
+            self.scroll_down(1)
+        }
     }
 
     pub fn left_release(&mut self) {
@@ -818,10 +831,6 @@ impl TextBuffer {
         let current_line = self.buffer.line(current_line_idx);
         let current_line_chars = self.buffer.line_to_char(current_line_idx);
         let current_line_length = current_line.len_chars();
-
-        // Slight hack to fix the semantic highlighting
-        // self.caret_is_trailing = 0;
-        // self.caret_char_pos = self.buffer.line_to_char(current_line_idx - 1);
         self.preserve_semantic_line_highlights(current_line_idx, current_line_idx.saturating_sub(1));
 
         // Update caret position
@@ -937,7 +946,7 @@ impl TextBuffer {
     pub fn on_editor_action(&mut self) {
         // Full update if number of lines have exceeded a "digit-boundary"
         if self.line_numbers_max_digits != text_utils::get_digits_in_number(self.buffer.len_lines() as u32) {
-            self.on_editor_refresh_metrics();
+            self.on_refresh_metrics(self.origin, self.extents);
             return;
         }
 
@@ -949,16 +958,7 @@ impl TextBuffer {
         self.update_absolute_char_positions();
     }
 
-    pub fn on_editor_refresh_metrics(&mut self) {
-        self.update_line_numbers_margin();
-        self.update_text_region();
-        self.update_numbers_region();
-        self.update_text_visible_line_count();
-        self.update_text_column_offset();
-        self.update_absolute_char_positions();
-    }
-
-    pub fn on_window_resize(&mut self, origin: (f32, f32), extents: (f32, f32)) {
+    pub fn on_refresh_metrics(&mut self, origin: (f32, f32), extents: (f32, f32)) {
         self.origin = origin;
         self.extents = extents;
 
@@ -1119,9 +1119,8 @@ impl TextBuffer {
 
     fn update_text_visible_line_count(&mut self) {
         // Here we explicitly do the line calculation properly
-        // then floor it, if we want to display "half" lines at the bottom
-        // simply floor the font_height before dividing instead
-        let max_lines_in_text_region = (self.text_extents.1 / self.renderer.borrow().font_height) as usize;
+        // then ceil it, since we want to display "half" lines at the bottom
+        let max_lines_in_text_region = (self.text_extents.1 / self.renderer.borrow().font_height).ceil() as usize;
         self.text_visible_line_count = min(self.buffer.len_lines(), max_lines_in_text_region);
     }
 

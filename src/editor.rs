@@ -9,7 +9,7 @@ use winapi::shared::windef::HWND;
 use winapi::um::winuser::{VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_TAB, VK_RETURN, VK_DELETE, VK_BACK};
 
 use crate::settings::{SCROLL_LINES_PER_MOUSEMOVE, SCROLL_LINES_PER_ROLL, 
-    NUMBER_OF_SPACES_PER_TAB, SCROLL_ZOOM_FACTOR};
+    NUMBER_OF_SPACES_PER_TAB, SCROLL_ZOOM_DELTA};
 use crate::renderer::TextRenderer;
 use crate::lsp_client::{LSPClient, LSPRequestType};
 use crate::lsp_structs::{GenericNotification, GenericRequest, GenericResponse, 
@@ -17,6 +17,7 @@ use crate::lsp_structs::{GenericNotification, GenericRequest, GenericResponse,
 use crate::language_support::{CPP_FILE_EXTENSIONS, CPP_LSP_SERVER, CPP_LANGUAGE_IDENTIFIER, 
     RUST_LSP_SERVER, RUST_FILE_EXTENSIONS, RUST_LANGUAGE_IDENTIFIER};
 use crate::buffer::{TextBuffer, SelectionMode, MouseSelectionMode};
+use crate::status_bar::StatusBar;
 
 type MousePos = (f32, f32);
 type ShiftDown = bool;
@@ -37,10 +38,48 @@ pub enum EditorCommand {
     LSPClientCrash(&'static str)
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct EditorLayout {
+    pub layout_origin: (f32, f32),
+    pub layout_extents: (f32, f32),
+    pub buffer_origin: (f32, f32),
+    pub buffer_extents: (f32, f32),
+    pub status_bar_origin: (f32, f32),
+    pub status_bar_extents: (f32, f32)
+}
+impl Default for EditorLayout {
+    fn default() -> Self {
+        Self {
+            layout_origin: (0.0, 0.0),
+            layout_extents: (0.0, 0.0),
+            buffer_origin: (0.0, 0.0),
+            buffer_extents: (0.0, 0.0),
+            status_bar_origin: (0.0, 0.0),
+            status_bar_extents: (0.0, 0.0)
+        }
+    }
+}
+impl EditorLayout {
+    pub fn new(width: f32, height: f32, font_height: f32) -> Self {
+        Self {
+            layout_origin: (0.0, 0.0),
+            layout_extents: (width, height),
+            buffer_origin: (0.0, 0.0),
+            buffer_extents: (width, height - font_height),
+            status_bar_origin: (0.0, height - font_height),
+            status_bar_extents: (width, font_height)
+        }
+    }
+}
+
 pub struct Editor {
     hwnd: HWND,
     renderer: Rc<RefCell<TextRenderer>>,
+    layout: EditorLayout,
+
     lsp_client: Option<LSPClient>,
+
+    status_bar: StatusBar,
     buffers: HashMap<String, TextBuffer>,
     current_buffer: String,
 
@@ -50,10 +89,21 @@ pub struct Editor {
 
 impl Editor {
     pub fn new(hwnd: HWND) -> Self {
+        let renderer = Rc::new(RefCell::new(TextRenderer::new(hwnd, "Fira Code Retina", 20.0)));
+
+        let layout = EditorLayout::new(
+            renderer.borrow().pixel_size.width as f32,
+            renderer.borrow().pixel_size.height as f32,
+            renderer.borrow().font_height);
+
         Self {
             hwnd,
-            renderer: Rc::new(RefCell::new(TextRenderer::new(hwnd, "Fira Code Retina", 20.0))),
+            renderer: renderer.clone(),
+            layout,
+
             lsp_client: None,
+
+            status_bar: StatusBar::new(layout.status_bar_origin, layout.status_bar_extents, renderer.clone()),
             buffers: HashMap::new(),
             current_buffer: "".to_owned(),
 
@@ -83,8 +133,8 @@ impl Editor {
             TextBuffer::new(
                 path,
                 language_identifier,
-                (0.0, 0.0), 
-                (self.renderer.borrow().pixel_size.width as f32, self.renderer.borrow().pixel_size.height as f32), 
+                self.layout.buffer_origin, 
+                self.layout.buffer_extents, 
                 self.renderer.clone()
             )
         );
@@ -115,16 +165,16 @@ impl Editor {
 
     pub fn draw(&mut self) {
         if let Some(buffer) = self.buffers.get_mut(&self.current_buffer) {
-            self.renderer.borrow().draw(buffer, self.caret_is_visible);
+            self.renderer.borrow().draw(&self.layout, buffer, &mut self.status_bar, self.caret_is_visible);
         }
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
         self.renderer.borrow_mut().resize(width, height);
         for buffer in self.buffers.values_mut() {
-            buffer.on_window_resize(
-                (0.0, 0.0), 
-                (self.renderer.borrow().pixel_size.width as f32, self.renderer.borrow().pixel_size.height as f32)
+            buffer.on_refresh_metrics(
+                self.layout.buffer_origin,
+                self.layout.buffer_extents
             );
         }
     }
@@ -134,16 +184,6 @@ impl Editor {
             return buffer.currently_selecting;
         }
         false
-    }
-
-    fn force_caret_visible(&mut self) {
-        if self.caret_is_visible {
-            self.force_visible_caret_timer = 1;
-        }
-        else {
-            self.caret_is_visible = true;
-            self.force_visible_caret_timer = 2;
-        }
     }
 
     fn handle_response_error(&mut self, request_type: LSPRequestType, response_error: &ResponseError) {
@@ -233,7 +273,7 @@ impl Editor {
         }
     }
 
-    pub fn process_document_change(did_change_notification: &DidChangeNotification, buffer: &mut TextBuffer, lsp_client: &mut LSPClient) {
+    fn process_document_change(did_change_notification: &DidChangeNotification, buffer: &mut TextBuffer, lsp_client: &mut LSPClient) {
         // rust-analyzer only supports full change notifications
         match buffer.language_identifier {
             CPP_LANGUAGE_IDENTIFIER => {
@@ -249,6 +289,31 @@ impl Editor {
         }
     }
 
+    fn inside_buffer_region(layout: &EditorLayout, pos: (f32, f32)) -> bool {
+        let horizontal_range = layout.buffer_origin.0..(layout.buffer_origin.0 + layout.buffer_extents.0);
+        let vertical_range = layout.buffer_origin.1..(layout.buffer_origin.1 + layout.buffer_extents.1);
+        return horizontal_range.contains(&pos.0) && vertical_range.contains(&pos.1);
+    }
+
+    fn force_caret_visible(caret_is_visible: &mut bool, caret_timer: &mut u32) {
+        if *caret_is_visible {
+            *caret_timer = 1;
+        }
+        else {
+            *caret_is_visible = true;
+            *caret_timer = 2;
+        }
+    }
+
+    fn change_font_size(zoom_delta: f32, layout: &mut EditorLayout, renderer: &mut TextRenderer) {
+        renderer.update_text_format(zoom_delta);
+
+        *layout = EditorLayout::new(
+            renderer.pixel_size.width as f32,
+            renderer.pixel_size.height as f32,
+            renderer.font_height);
+    }
+
     pub fn execute_command(&mut self, cmd: &EditorCommand) {
         if let Some(buffer) = self.buffers.get_mut(&self.current_buffer) {
             match *cmd {
@@ -261,50 +326,54 @@ impl Editor {
                 EditorCommand::ScrollUp(ctrl_down) => {
                     match ctrl_down {
                         true => {
-                            self.renderer.borrow_mut().update_text_format(SCROLL_ZOOM_FACTOR);
-                            buffer.on_editor_refresh_metrics();
+                            Self::change_font_size(SCROLL_ZOOM_DELTA, &mut self.layout, &mut *self.renderer.borrow_mut());
+                            buffer.on_refresh_metrics(
+                                self.layout.buffer_origin,
+                                self.layout.buffer_extents
+                            );
                         },
                         false => buffer.scroll_up(SCROLL_LINES_PER_ROLL)
                     }
-                    buffer.on_editor_action();
                 },
                 EditorCommand::ScrollDown(ctrl_down) => {
                     match ctrl_down {
                         true => {
-                            self.renderer.borrow_mut().update_text_format(-SCROLL_ZOOM_FACTOR);
-                            buffer.on_editor_refresh_metrics();
-                        },
+                            Self::change_font_size(-SCROLL_ZOOM_DELTA, &mut self.layout, &mut *self.renderer.borrow_mut());
+                            buffer.on_refresh_metrics(
+                                self.layout.buffer_origin,
+                                self.layout.buffer_extents
+                            );
+                        }
                         false => buffer.scroll_down(SCROLL_LINES_PER_ROLL)
                     }
-                    buffer.on_editor_action();
                 },
                 EditorCommand::LeftClick(mouse_pos, shift_down) => {
-                    buffer.left_click(mouse_pos, shift_down);
-                    buffer.on_editor_action();
-                    self.force_caret_visible();
+                    if Self::inside_buffer_region(&self.layout, mouse_pos) {
+                        buffer.left_click(mouse_pos, shift_down);
+                        Self::force_caret_visible(&mut self.caret_is_visible, &mut self.force_visible_caret_timer);
+                    }
                 },
                 EditorCommand::LeftDoubleClick(mouse_pos) => {
-                    buffer.left_double_click(mouse_pos);
-                    buffer.on_editor_action();
-                    self.force_caret_visible();
+                    if Self::inside_buffer_region(&self.layout, mouse_pos) {
+                        buffer.left_double_click(mouse_pos);
+                        Self::force_caret_visible(&mut self.caret_is_visible, &mut self.force_visible_caret_timer);
+                    }
                 }
                 EditorCommand::LeftRelease => buffer.left_release(),
                 EditorCommand::MouseMove(mouse_pos) => {
-                    if mouse_pos.1 > (buffer.origin.1 + buffer.extents.1) {
+                    if mouse_pos.1 > (self.layout.layout_origin.1 + self.layout.layout_extents.1) {
                         buffer.scroll_down(SCROLL_LINES_PER_MOUSEMOVE);
                     }
-                    else if mouse_pos.1 < buffer.origin.1 {
+                    else if mouse_pos.1 < self.layout.layout_origin.1 {
                         buffer.scroll_up(SCROLL_LINES_PER_MOUSEMOVE);
                     }
-                    if mouse_pos.0 > (buffer.origin.0 + buffer.extents.0) {
+                    if mouse_pos.0 > (self.layout.layout_origin.0 + self.layout.layout_extents.0) {
                         buffer.scroll_right(SCROLL_LINES_PER_MOUSEMOVE);
                     }
-                    else if mouse_pos.0 < buffer.origin.0 {
+                    else if mouse_pos.0 < self.layout.layout_origin.0 {
                         buffer.scroll_left(SCROLL_LINES_PER_MOUSEMOVE);
                     }
-
                     buffer.set_mouse_selection(MouseSelectionMode::Move, mouse_pos);
-                    buffer.on_editor_action();
                 },
                 EditorCommand::KeyPressed(key, shift_down, ctrl_down) => { 
                     match (key, ctrl_down) {
@@ -377,21 +446,21 @@ impl Editor {
                         }
                         _ => {}
                     }
-                    buffer.on_editor_action();
-                    self.force_caret_visible();
+                    Self::force_caret_visible(&mut self.caret_is_visible, &mut self.force_visible_caret_timer);
                 }
                 EditorCommand::CharInsert(character) => {
                     let did_change_notification = buffer.insert_char(character);
                     if let Some(lsp_client) = self.lsp_client.as_mut() {
                         Self::process_document_change(&did_change_notification, buffer, lsp_client);
                     }
-                    buffer.on_editor_action();
-                    self.force_caret_visible();
+                    Self::force_caret_visible(&mut self.caret_is_visible, &mut self.force_visible_caret_timer);
                 }
                 EditorCommand::LSPClientCrash(client) => {
                     println!("The {} language server has crashed!", client);
                 }
             }
+
+            buffer.on_editor_action();
         }
     }
 }
