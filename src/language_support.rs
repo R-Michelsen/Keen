@@ -191,7 +191,12 @@ pub fn highlight_text(text: &str, start_pos: usize, caret_pos: usize, language_i
     let mut bracket_type = ('\0', '\0');
     let mut backwards_offset = 0;
     while let Some(prev_char) = caret_it.prev() {
+        let relative_pos = caret_pos as isize - start_pos as isize - backwards_offset as isize;
+
         if let Some(brackets) = text_utils::is_opening_bracket(prev_char) {
+            if contained_in_comments(relative_pos as u32) {
+                continue;
+            }
             match closed_map.get_mut(&brackets.1) {
                 Some(size) if *size > 0 => {
                     *size -= 1;
@@ -204,6 +209,9 @@ pub fn highlight_text(text: &str, start_pos: usize, caret_pos: usize, language_i
             }
         }
         if let Some(brackets) = text_utils::is_closing_bracket(prev_char) {
+            if contained_in_comments(relative_pos as u32) {
+                continue;
+            }
             *closed_map.entry(brackets.1).or_insert(0) += 1;
         }
         backwards_offset += 1;
@@ -223,19 +231,18 @@ pub fn highlight_text(text: &str, start_pos: usize, caret_pos: usize, language_i
     for (offset, chr) in caret_it.enumerate() {
         // Skip the first char as it is the opening bracket itself
         if offset == 0 { continue; }
-        let relative_pos = offset + (backwards_offset + caret_pos);
+        let relative_pos = offset as isize + (caret_pos as isize - start_pos as isize - backwards_offset as isize);
 
         if let Some(brackets) = text_utils::is_closing_bracket(chr) {
             if contained_in_comments(relative_pos as u32) {
                 continue;
             }
-
             if bracket_type == brackets {
                 if closing_brackets_left == 0 {
                     // Get the left bracket position relative to the absolute
                     // start position of the current view
-                    let left_pos = (caret_pos as isize - start_pos as isize) - backwards_offset as isize;
-                    let right_pos = left_pos + offset as isize;
+                    let right_pos = relative_pos;
+                    let left_pos = relative_pos - offset as isize;
 
                     // Only include a position if its inside the visible
                     // range of the current text buffer

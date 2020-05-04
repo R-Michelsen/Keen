@@ -2,7 +2,7 @@ use crate::dx_ok;
 use crate::settings::{NUMBER_OF_SPACES_PER_TAB, AUTOCOMPLETE_BRACKETS};
 use crate::lsp_structs::{DidChangeNotification, TextDocumentContentChangeEvent, 
                     VersionedTextDocumentIdentifier, SemanticTokenTypes, CppSemanticTokenTypes, 
-                    RustSemanticTokenTypes, RustSemanticTokenModifiers, Range, Position};
+                    RustSemanticTokenTypes, RustSemanticTokenModifiers};
 use crate::language_support::{CPP_LANGUAGE_IDENTIFIER, RUST_LANGUAGE_IDENTIFIER, LexicalHighlights, highlight_text};
 use crate::renderer::TextRenderer;
 use crate::text_utils;
@@ -513,6 +513,7 @@ impl TextBuffer {
             changes.push(self.delete_selection());
         }
 
+        let mut caret_absolute_pos = self.get_caret_absolute_pos();
         for brackets in &AUTOCOMPLETE_BRACKETS {
             if chr == brackets.0 {
                 return self.insert_bracket(*brackets);
@@ -521,14 +522,15 @@ impl TextBuffer {
             // while the caret is next to closing bracket. Simply
             // advance the caret position once
             if chr == brackets.1 {
-                if self.buffer.char(self.get_caret_absolute_pos()) == brackets.1 {
+                if self.buffer.char(caret_absolute_pos) == brackets.1 {
                     self.set_selection(SelectionMode::Right, 1, false);
                     return DidChangeNotification::new(self.next_versioned_identifer(), changes);
                 }
                 // Otherwise if possible move the scope indent back once
                 else {
                     let offset = self.get_leading_whitespace_offset();
-                    if offset >= NUMBER_OF_SPACES_PER_TAB {
+                    let current_char_pos = caret_absolute_pos - self.buffer.line_to_char(self.buffer.char_to_line(caret_absolute_pos));
+                    if offset >= NUMBER_OF_SPACES_PER_TAB && current_char_pos == offset {
                         self.set_selection(SelectionMode::Left, NUMBER_OF_SPACES_PER_TAB, true);
                         changes.push(self.delete_selection());
                     }
@@ -536,9 +538,9 @@ impl TextBuffer {
             }
         }
 
-        let caret_absolute_pos = self.get_caret_absolute_pos();
+        caret_absolute_pos = self.get_caret_absolute_pos();
         let line = self.buffer.char_to_line(caret_absolute_pos);
-        let char_pos = caret_absolute_pos - self.buffer.line_to_char(line);
+        let char_pos = caret_absolute_pos - self.buffer.line_to_char(self.buffer.char_to_line(caret_absolute_pos));
 
         self.buffer.insert_char(caret_absolute_pos, chr);
         self.set_selection(SelectionMode::Right, 1, false);
