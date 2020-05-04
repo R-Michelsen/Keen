@@ -1182,9 +1182,7 @@ impl TextBuffer {
 
     // Finds the number of characters until a boundary
     // A boundary is defined to be punctuation when the
-    // current char is inside a word, and alphanumeric otherwise
-    // bool specifies the direction to search in,
-    // true for right false for left
+    // current char is inside a word, and alphanumeric otherwise.
     fn get_boundary_char_count(&self, search_direction: CharSearchDirection) -> usize {
         let caret_absolute_pos = self.get_caret_absolute_pos();
         let mut count = 0;
