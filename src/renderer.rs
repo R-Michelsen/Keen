@@ -33,6 +33,7 @@ use winapi::{
             D2D1_POINT_2F, D2D1_MATRIX_3X2_F, D2D1_SIZE_U, D2D1_RECT_F,
             D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FEATURE_LEVEL_DEFAULT,
             D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
+            D2D1_DRAW_TEXT_OPTIONS_CLIP,
             D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_USAGE_NONE,
             D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES,
             D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_ANTIALIAS_MODE_ALIASED,
@@ -301,45 +302,72 @@ impl TextRenderer {
         }
     }
 
-    fn draw_enclosing_brackets(&self, origin: (f32, f32), text_layout: *mut IDWriteTextLayout, enclosing_bracket_positions: [Option<usize>; 2]) {
-        unsafe {
-            let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
-            for bracket_pos in &enclosing_bracket_positions {
-                match bracket_pos {
-                    Some(pos) => {
-                        let mut dummy = (0.0, 0.0);
-                        dx_ok!((*text_layout).HitTestTextPosition(
-                            *pos as u32,
-                            false as i32,
-                            &mut dummy.0,
-                            &mut dummy.1,
-                            metrics_uninit.as_mut_ptr(),
-                        ));
-                        let metrics = metrics_uninit.assume_init();
-            
-                        let highlight_rect = D2D1_RECT_F {
-                            left: origin.0 + metrics.left,
-                            top: origin.1 + metrics.top,
-                            right: origin.0 + metrics.left + metrics.width,
-                            bottom: origin.1 + metrics.top + metrics.height
-                        };
+    fn get_rect_from_hit_test(&self, pos: u32, origin: (f32, f32), text_layout: *mut IDWriteTextLayout) -> D2D1_RECT_F {
+        let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
+        let mut dummy = (0.0, 0.0);
 
-                        let rounded_rect = D2D1_ROUNDED_RECT {
-                            rect: highlight_rect,
-                            radiusX: 5.0,
-                            radiusY: 5.0
-                        };
-            
-                        (*self.target).DrawRoundedRectangle(
-                            &rounded_rect, 
-                            self.theme.bracket_brush as *mut ID2D1Brush, 
-                            self.theme.bracket_rect_width, 
-                            null_mut()
-                        );
-                    },
-                    None => {}
-                }
+        unsafe {
+            dx_ok!((*text_layout).HitTestTextPosition(
+                pos,
+                false as i32,
+                &mut dummy.0,
+                &mut dummy.1,
+                metrics_uninit.as_mut_ptr(),
+            ));
+            let metrics = metrics_uninit.assume_init();
+
+            D2D1_RECT_F {
+                left: origin.0 + metrics.left,
+                top: origin.1 + metrics.top,
+                right: origin.0 + metrics.left + metrics.width,
+                bottom: origin.1 + metrics.top + metrics.height
             }
+        }
+    }
+
+    fn draw_rounded_rect(&self, rect: &D2D1_RECT_F) {
+        let rounded_rect = D2D1_ROUNDED_RECT {
+            rect: *rect,
+            radiusX: 3.0,
+            radiusY: 3.0
+        };
+
+        unsafe {
+            (*self.target).DrawRoundedRectangle(
+                &rounded_rect, 
+                self.theme.bracket_brush as *mut ID2D1Brush, 
+                self.theme.bracket_rect_width, 
+                null_mut()
+            );
+        }
+    }
+
+    fn draw_enclosing_brackets(&self, origin: (f32, f32), text_layout: *mut IDWriteTextLayout, enclosing_bracket_positions: [Option<usize>; 2]) {
+        match &enclosing_bracket_positions {
+            [Some(pos1), Some(pos2)] => {
+                let rect1 = self.get_rect_from_hit_test(*pos1 as u32, origin, text_layout);
+                let rect2 = self.get_rect_from_hit_test(*pos2 as u32, origin, text_layout);
+
+                // If the brackets are right next to eachother, draw one big rect
+                if *pos2 == (*pos1 + 1) {
+                    let rect = D2D1_RECT_F {
+                        left: rect1.left,
+                        top: rect1.top,
+                        right: rect2.right,
+                        bottom: rect2.bottom
+                    };
+                    self.draw_rounded_rect(&rect);
+                    return;
+                }
+
+                self.draw_rounded_rect(&rect1);
+                self.draw_rounded_rect(&rect2);
+            }
+            [None, Some(pos)]  | [Some(pos), None] => {
+                let rect = self.get_rect_from_hit_test(*pos as u32, origin, text_layout);
+                self.draw_rounded_rect(&rect);
+            }
+            [None, None] => {}
         }
     }
 
@@ -357,7 +385,7 @@ impl TextRenderer {
                 },
                 layout,
                 text_brush as *mut ID2D1Brush,
-                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
+                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT | D2D1_DRAW_TEXT_OPTIONS_CLIP
             );
         }
     }

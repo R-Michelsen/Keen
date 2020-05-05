@@ -10,7 +10,7 @@ use winapi::um::winuser::{VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_TAB, VK_RETURN, 
 
 use crate::WM_REGION_CHANGED;
 use crate::settings::{SCROLL_LINES_PER_MOUSEMOVE, SCROLL_LINES_PER_ROLL, 
-    NUMBER_OF_SPACES_PER_TAB, SCROLL_ZOOM_DELTA};
+    NUMBER_OF_SPACES_PER_TAB, SCROLL_ZOOM_DELTA, RESIZABLE_BORDER_WIDTH};
 use crate::renderer::{TextRenderer, RenderableTextRegion};
 use crate::lsp_client::{LSPClient, LSPRequestType};
 use crate::lsp_structs::{GenericNotification, GenericRequest, GenericResponse, 
@@ -25,7 +25,7 @@ type MousePos = (f32, f32);
 type ShiftDown = bool;
 type CtrlDown = bool;
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum EditorCommand {
     CaretVisible,
     CaretInvisible,
@@ -49,7 +49,9 @@ pub struct EditorLayout {
     pub status_bar_origin: (f32, f32),
     pub status_bar_extents: (f32, f32),
     pub file_tree_origin: (f32, f32),
-    pub file_tree_extents: (f32, f32)
+    pub file_tree_extents: (f32, f32),
+    pub resizable_border_origin: (f32, f32),
+    pub resizable_border_extents: (f32, f32)
 }
 impl Default for EditorLayout {
     fn default() -> Self {
@@ -61,13 +63,14 @@ impl Default for EditorLayout {
             status_bar_origin: (0.0, 0.0),
             status_bar_extents: (0.0, 0.0),
             file_tree_origin: (0.0, 0.0),
-            file_tree_extents: (0.0, 0.0)
+            file_tree_extents: (0.0, 0.0),
+            resizable_border_origin: (0.0, 0.0),
+            resizable_border_extents: (0.0, 0.0)
         }
     }
 }
 impl EditorLayout {
-    pub fn new(width: f32, height: f32, font_height: f32) -> Self {
-        let file_tree_width = width / 7.5;
+    pub fn new(width: f32, height: f32, file_tree_width: f32, font_height: f32) -> Self {
         Self {
             layout_origin: (0.0, 0.0),
             layout_extents: (width, height),
@@ -76,7 +79,9 @@ impl EditorLayout {
             status_bar_origin: (0.0, height - font_height),
             status_bar_extents: (width, font_height),
             file_tree_origin: (0.0, 0.0),
-            file_tree_extents: (file_tree_width, height - font_height)
+            file_tree_extents: (file_tree_width, height - font_height),
+            resizable_border_origin: (file_tree_width - (RESIZABLE_BORDER_WIDTH / 2.0), 0.0),
+            resizable_border_extents: (RESIZABLE_BORDER_WIDTH, height - font_height)
         }
     }
 }
@@ -124,6 +129,9 @@ pub struct Editor {
 
     region_type: RegionType,
 
+    resizing_file_tree: bool,
+    resizing_file_tree_offset: f32,
+
     mouse_pos: (f32, f32),
     mouse_pos_captured: bool,
     force_visible_caret_timer: u32,
@@ -137,6 +145,7 @@ impl Editor {
         let layout = EditorLayout::new(
             renderer.borrow().pixel_size.width as f32,
             renderer.borrow().pixel_size.height as f32,
+            renderer.borrow().pixel_size.width as f32 / 7.5,
             renderer.borrow().font_height);
 
         Self {
@@ -153,6 +162,10 @@ impl Editor {
             current_buffer: "".to_owned(),
 
             region_type: RegionType::Display,
+
+            resizing_file_tree: false,
+            resizing_file_tree_offset: 0.0,
+
             mouse_pos: (0.0, 0.0),
             mouse_pos_captured: false,
             force_visible_caret_timer: 0,
@@ -196,12 +209,12 @@ impl Editor {
                 self.lsp_client = Some(LSPClient::new(self.hwnd, CPP_LSP_SERVER));
                 self.lsp_client.as_mut().unwrap().send_initialize_request(path.to_owned());
                 return;
-            },
+            }
             None if RUST_FILE_EXTENSIONS.contains(&extension) => {
                 self.lsp_client = Some(LSPClient::new(self.hwnd, RUST_LSP_SERVER));
                 self.lsp_client.as_mut().unwrap().send_initialize_request(path.to_owned());
                 return;
-            },
+            }
             _ => {}
         }
 
@@ -223,6 +236,27 @@ impl Editor {
         self.layout = EditorLayout::new(
             self.renderer.borrow().pixel_size.width as f32,
             self.renderer.borrow().pixel_size.height as f32,
+            self.layout.file_tree_extents.0,
+            self.renderer.borrow().font_height);
+
+        self.status_bar.resize(self.layout.status_bar_origin, self.layout.status_bar_extents);
+        self.file_tree.resize(self.layout.file_tree_origin, self.layout.file_tree_extents);
+
+        for buffer in self.buffers.values_mut() {
+            buffer.on_refresh_metrics(
+                self.layout.buffer_origin,
+                self.layout.buffer_extents
+            );
+        }
+    }
+
+    // Resizes the file tree left or right according
+    // to the delta parameter
+    pub fn resize_file_tree(&mut self, new_width: f32) {
+        self.layout = EditorLayout::new(
+            self.renderer.borrow().pixel_size.width as f32,
+            self.renderer.borrow().pixel_size.height as f32,
+            new_width,
             self.renderer.borrow().font_height);
 
         self.status_bar.resize(self.layout.status_bar_origin, self.layout.status_bar_extents);
@@ -257,7 +291,7 @@ impl Editor {
 
     fn handle_response_error(&mut self, request_type: LSPRequestType, response_error: &ResponseError) {
         match request_type {
-            LSPRequestType::InitializationRequest(_) => {},
+            LSPRequestType::InitializationRequest(_) => {}
             LSPRequestType::SemanticTokensRequest(uri) => {
                 // If the semantic token request fails
                 // due to content changed, send a new one
@@ -348,12 +382,12 @@ impl Editor {
             CPP_LANGUAGE_IDENTIFIER => {
                 lsp_client.send_did_change_notification(did_change_notification);
                 lsp_client.send_semantic_token_request(buffer.get_uri());
-            },
+            }
             RUST_LANGUAGE_IDENTIFIER => {
                 let full_did_change_notification = buffer.get_full_did_change_notification();
                 lsp_client.send_did_change_notification(&full_did_change_notification);
                 lsp_client.send_semantic_token_request(buffer.get_uri());
-            },
+            }
             _ => {}
         }
     }
@@ -374,6 +408,7 @@ impl Editor {
         *layout = EditorLayout::new(
             renderer.pixel_size.width as f32,
             renderer.pixel_size.height as f32,
+            layout.file_tree_extents.0,
             renderer.font_height);
     }
 
@@ -389,7 +424,7 @@ impl Editor {
                 EditorCommand::CaretVisible | EditorCommand::CaretInvisible if self.force_visible_caret_timer > 0 => {
                     self.force_visible_caret_timer = self.force_visible_caret_timer.saturating_sub(1);
                     self.caret_is_visible = true;
-                },
+                }
                 EditorCommand::CaretVisible => self.caret_is_visible = true,
                 EditorCommand::CaretInvisible => self.caret_is_visible = false,
                 EditorCommand::ScrollUp(ctrl_down) => {
@@ -403,7 +438,7 @@ impl Editor {
                         },
                         false => buffer.scroll_up(SCROLL_LINES_PER_ROLL)
                     }
-                },
+                }
                 EditorCommand::ScrollDown(ctrl_down) => {
                     match ctrl_down {
                         true => {
@@ -415,15 +450,15 @@ impl Editor {
                         }
                         false => buffer.scroll_down(SCROLL_LINES_PER_ROLL)
                     }
-                },
+                }
                 EditorCommand::LeftClick(mouse_pos, shift_down) => {
                     buffer.left_click(mouse_pos, shift_down);
                     Self::force_caret_visible(&mut self.caret_is_visible, &mut self.force_visible_caret_timer);
-                },
+                }
                 EditorCommand::LeftDoubleClick(mouse_pos) => {
                     buffer.left_double_click(mouse_pos);
                     Self::force_caret_visible(&mut self.caret_is_visible, &mut self.force_visible_caret_timer);
-                },
+                }
                 EditorCommand::LeftRelease => buffer.left_release(),
                 EditorCommand::MouseMove(mouse_pos) => {
                     if mouse_pos.1 > (self.layout.layout_origin.1 + self.layout.layout_extents.1) {
@@ -439,7 +474,7 @@ impl Editor {
                         buffer.scroll_left(SCROLL_LINES_PER_MOUSEMOVE);
                     }
                     buffer.set_mouse_selection(MouseSelectionMode::Move, mouse_pos);
-                },
+                }
                 EditorCommand::KeyPressed(key, shift_down, ctrl_down) => { 
                     match (key, ctrl_down) {
                         (VK_LEFT, false)   => buffer.move_left(shift_down),
@@ -529,6 +564,21 @@ impl Editor {
         }
     }
 
+    fn execute_resizable_border_command(&mut self, cmd: &EditorCommand) {
+        match *cmd {
+            EditorCommand::LeftClick(mouse_pos, _) => {
+                self.resizing_file_tree = true;
+                self.resizing_file_tree_offset = (self.layout.file_tree_origin.0 + self.layout.file_tree_extents.0) - mouse_pos.0;
+            }
+            EditorCommand::LeftRelease => self.resizing_file_tree = false,
+            EditorCommand::MouseMove(mouse_pos) if self.resizing_file_tree => {
+                self.resize_file_tree(mouse_pos.0 + self.resizing_file_tree_offset);
+                self.draw();
+            }
+            _ => {}
+        }
+    }
+
     fn execute_status_bar_command(&mut self, cmd: &EditorCommand) {
 
     }
@@ -538,7 +588,13 @@ impl Editor {
     }
 
     fn update_region_type(&mut self) {
-        if Self::inside_region(self.mouse_pos, self.layout.buffer_origin, self.layout.buffer_extents) {
+        if Self::inside_region(self.mouse_pos, self.layout.resizable_border_origin, self.layout.resizable_border_extents) {
+            if self.region_type != RegionType::ResizableBorder {
+                unsafe { SendMessageW(self.hwnd, WM_REGION_CHANGED, RegionType::to_usize(RegionType::ResizableBorder), 0); }
+                self.region_type = RegionType::ResizableBorder;
+            }
+        }
+        else if Self::inside_region(self.mouse_pos, self.layout.buffer_origin, self.layout.buffer_extents) {
             if self.region_type != RegionType::Text {
                 unsafe { SendMessageW(self.hwnd, WM_REGION_CHANGED, RegionType::to_usize(RegionType::Text), 0); }
                 self.region_type = RegionType::Text;
@@ -567,14 +623,21 @@ impl Editor {
             _ => {}
         }
 
+        if Self::inside_region(self.mouse_pos, self.layout.resizable_border_origin, self.layout.resizable_border_extents) || self.resizing_file_tree {
+            self.execute_resizable_border_command(cmd);
+            return;
+        }
         if Self::inside_region(self.mouse_pos, self.layout.buffer_origin, self.layout.buffer_extents) {
             self.execute_buffer_command(cmd);
+            return;
         }
         else if Self::inside_region(self.mouse_pos, self.layout.status_bar_origin, self.layout.status_bar_extents) {
             self.execute_status_bar_command(cmd);
+            return;
         }
         else if Self::inside_region(self.mouse_pos, self.layout.file_tree_origin, self.layout.file_tree_extents) {
             self.execute_file_tree_command(cmd);
+            return;
         }
     }
 }

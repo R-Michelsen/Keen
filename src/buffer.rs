@@ -313,7 +313,7 @@ impl TextBuffer {
 
                 // Reset the cached width
                 self.cached_char_offset = 0;
-            },
+            }
             SelectionMode::Up | SelectionMode::Down => {
                 let current_line = self.buffer.char_to_line(caret_absolute_pos);
 
@@ -353,7 +353,7 @@ impl TextBuffer {
                 else if target_line_idx < self.top_line {
                     self.scroll_up(1);
                 }
-            },
+            }
         }
 
         if !extend_current_selection {
@@ -722,7 +722,7 @@ impl TextBuffer {
                         length
                     };
                     highlights.push((range, token_type));
-                },
+                }
                 RUST_LANGUAGE_IDENTIFIER => {
                     let token_type = RustSemanticTokenTypes::to_semantic_token_type(&RustSemanticTokenTypes::from_u32(self.semantic_tokens[i + 3]));
                     let line_absolute_pos = self.buffer.line_to_char(line as usize);
@@ -734,7 +734,7 @@ impl TextBuffer {
 
                     // We don't currently use the modifiers for highlighting
                     let _  = RustSemanticTokenModifiers::from_u32(self.semantic_tokens[i + 4]);
-                },
+                }
                 _ => return Vec::new()
             }
 
@@ -1055,7 +1055,7 @@ impl TextBuffer {
         for chr in string.chars() {
             match rope_iterator.next() {
                 Some(x) if x == chr => continue,
-                _ => return false,
+                _ => return false
             }
         }
         true
@@ -1066,7 +1066,7 @@ impl TextBuffer {
         for chr in string.chars().rev() {
             match rope_iterator.prev() {
                 Some(x) if x == chr => continue,
-                _ => return false,
+                _ => return false
             }
         }
         true

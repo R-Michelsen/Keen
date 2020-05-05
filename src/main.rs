@@ -102,7 +102,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
     let shift_down = (GetKeyState(VK_SHIFT) & 0x80) != 0;
     let ctrl_down = (GetKeyState(VK_CONTROL) & 0x80) != 0;
 
-    static mut mouse_from_outside_window: bool = false;
+    static mut MOUSE_FROM_OUTSIDE_WINDOW: bool = false;
     match msg {
         WM_REGION_CHANGED => {
             match RegionType::from_usize(wparam) {
@@ -112,7 +112,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 RegionType::Unknown => {}
             }
             0
-        },
+        }
         WM_LSP_RESPONSE => {
             let data = wparam as *mut u8;
             let range = std::mem::transmute::<isize, (i32, i32)>(lparam); 
@@ -125,30 +125,30 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             dealloc(data, Layout::from_size_align(MAX_LSP_RESPONSE_SIZE, 8).unwrap());
             InvalidateRect(hwnd, null_mut(), false as i32);
             0
-        },
+        }
         WM_LSP_CRASH => {
             let len = lparam as usize;
             let client = std::str::from_utf8(std::slice::from_raw_parts(wparam as *const u8, len)).unwrap();
             (*editor).execute_command(&EditorCommand::LSPClientCrash(client));
             0
-        },
+        }
         WM_CARET_VISIBLE => {
             (*editor).execute_command(&EditorCommand::CaretVisible);
             InvalidateRect(hwnd, null_mut(), false as i32);
             0
-        },
+        }
         WM_CARET_INVISIBLE => {
             (*editor).execute_command(&EditorCommand::CaretInvisible);
             InvalidateRect(hwnd, null_mut(), false as i32);
             0
-        },
+        }
         WM_PAINT => {
             let mut ps = MaybeUninit::<PAINTSTRUCT>::uninit();
             BeginPaint(hwnd, ps.as_mut_ptr());
             (*editor).draw();
             EndPaint(hwnd, ps.as_mut_ptr());
             0
-        },
+        }
         WM_ERASEBKGND => {
             0
         }
@@ -162,17 +162,17 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             (*editor).resize(width.into(), height.into());
             InvalidateRect(hwnd, null_mut(), false as i32);
             0
-        },
+        }
         WM_DESTROY | WM_NCDESTROY => {
             PostQuitMessage(0);
             0
-        },
+        }
         WM_CHAR => {
             if wparam >= 0x20 && wparam <= 0x7E {
                 (*editor).execute_command(&EditorCommand::CharInsert(wparam as u16));
             }
             0
-        },
+        }
         WM_MOUSEWHEEL => {
             if GET_WHEEL_DELTA_WPARAM(wparam) > 0 {
                 (*editor).execute_command(&EditorCommand::ScrollUp(ctrl_down));
@@ -182,7 +182,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             }
             InvalidateRect(hwnd, null_mut(), false as i32);
             0
-        },
+        }
         WM_LBUTTONDOWN => {
             SetCapture(hwnd);
             (*editor).capture_mouse();
@@ -190,7 +190,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             (*editor).execute_command(&EditorCommand::LeftClick(mouse_pos, shift_down));
             InvalidateRect(hwnd, null_mut(), false as i32);
             0
-        },
+        }
         WM_LBUTTONDBLCLK => {
             let mouse_pos = (GET_X_LPARAM(lparam) as f32, GET_Y_LPARAM(lparam) as f32);
             (*editor).execute_command(&EditorCommand::LeftDoubleClick(mouse_pos));
@@ -203,16 +203,16 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             (*editor).execute_command(&EditorCommand::LeftRelease);
             InvalidateRect(hwnd, null_mut(), false as i32);
             0
-        },
+        }
         WM_KEYDOWN => {
             (*editor).execute_command(&EditorCommand::KeyPressed(wparam as i32, shift_down, ctrl_down));
             InvalidateRect(hwnd, null_mut(), false as i32);
             0
-        },
+        }
         WM_MOUSEMOVE => {
             // If the mouse came from outside the window,
             // track when the mouse leaves the window (and fires the WM_MOUSELEAVE event)
-            if mouse_from_outside_window {
+            if MOUSE_FROM_OUTSIDE_WINDOW {
                 let mut mouse_tracker = TRACKMOUSEEVENT {
                     cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
                     dwFlags: TME_LEAVE,
@@ -220,7 +220,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     dwHoverTime: HOVER_DEFAULT
                 };
                 TrackMouseEvent(&mut mouse_tracker as *mut _);
-                mouse_from_outside_window = false;
+                MOUSE_FROM_OUTSIDE_WINDOW = false;
             }
 
             let mouse_pos = (GET_X_LPARAM(lparam) as f32, GET_Y_LPARAM(lparam) as f32);
@@ -229,10 +229,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 InvalidateRect(hwnd, null_mut(), false as i32);
             }
             0
-        },
+        }
         WM_MOUSELEAVE => {
             (*editor).mouse_left_window();
-            mouse_from_outside_window = true;
+            MOUSE_FROM_OUTSIDE_WINDOW = true;
             0
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam)
@@ -287,8 +287,7 @@ fn main() {
             hwndTrack: hwnd,
             dwHoverTime: HOVER_DEFAULT
         };
-        let d = TrackMouseEvent(&mut mouse_tracker as *mut _);
-        println!("{}", d);
+        TrackMouseEvent(&mut mouse_tracker as *mut _);
 
         let mut msg = MaybeUninit::<MSG>::uninit();
 

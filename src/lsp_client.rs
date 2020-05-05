@@ -110,7 +110,7 @@ impl LSPClient {
                                         return;
                                     }
                                 }
-                            },
+                            }
                             Err(e) => {
                                 println!("Could not read header part of language server message {:?}", e);
                                 SendMessageW(hwnd_clone as HWND, WM_LSP_CRASH, (client_name.as_ptr()) as usize, client_name.len() as isize); 
@@ -173,10 +173,10 @@ impl LSPClient {
                 initialization_options = Some(to_value(ClangdInitializationOptions {
                     clangd_file_status: Some(true)
                 }).unwrap());
-            },
+            }
             RUST_LSP_SERVER => {
                 initialization_options = None
-            },
+            }
             _ => initialization_options = None
         }
 

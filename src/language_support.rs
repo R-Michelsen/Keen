@@ -202,7 +202,7 @@ pub fn highlight_text(text: &str, start_pos: usize, caret_pos: usize, language_i
             match closed_map.get_mut(&brackets.1) {
                 Some(size) if *size > 0 => {
                     *size -= 1;
-                },
+                }
                 _ => {
                     bracket_type = brackets;
                     backwards_offset += 1;
