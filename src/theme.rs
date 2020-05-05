@@ -88,7 +88,7 @@ impl Theme {
             background_color: DEFAULT_BACKGROUND_COLOR,
             status_bar_brush: null_mut(),
             bracket_brush: null_mut(),
-            bracket_rect_width: 1.0,
+            bracket_rect_width: 2.0,
             text_brush: null_mut(),
             line_number_brush: null_mut(),
             caret_brush: null_mut(),

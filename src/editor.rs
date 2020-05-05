@@ -6,11 +6,12 @@ use std::{
     path::Path
 };
 use winapi::shared::windef::HWND;
-use winapi::um::winuser::{VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_TAB, VK_RETURN, VK_DELETE, VK_BACK};
+use winapi::um::winuser::{VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_TAB, VK_RETURN, VK_DELETE, VK_BACK, SendMessageW};
 
+use crate::WM_REGION_CHANGED;
 use crate::settings::{SCROLL_LINES_PER_MOUSEMOVE, SCROLL_LINES_PER_ROLL, 
     NUMBER_OF_SPACES_PER_TAB, SCROLL_ZOOM_DELTA};
-use crate::renderer::TextRenderer;
+use crate::renderer::{TextRenderer, RenderableTextRegion};
 use crate::lsp_client::{LSPClient, LSPRequestType};
 use crate::lsp_structs::{GenericNotification, GenericRequest, GenericResponse, 
     DidChangeNotification, ResponseError, SemanticTokenResult, ErrorCodes};
@@ -18,6 +19,7 @@ use crate::language_support::{CPP_FILE_EXTENSIONS, CPP_LSP_SERVER, CPP_LANGUAGE_
     RUST_LSP_SERVER, RUST_FILE_EXTENSIONS, RUST_LANGUAGE_IDENTIFIER};
 use crate::buffer::{TextBuffer, SelectionMode, MouseSelectionMode};
 use crate::status_bar::StatusBar;
+use crate::file_tree::FileTree;
 
 type MousePos = (f32, f32);
 type ShiftDown = bool;
@@ -45,7 +47,9 @@ pub struct EditorLayout {
     pub buffer_origin: (f32, f32),
     pub buffer_extents: (f32, f32),
     pub status_bar_origin: (f32, f32),
-    pub status_bar_extents: (f32, f32)
+    pub status_bar_extents: (f32, f32),
+    pub file_tree_origin: (f32, f32),
+    pub file_tree_extents: (f32, f32)
 }
 impl Default for EditorLayout {
     fn default() -> Self {
@@ -55,19 +59,52 @@ impl Default for EditorLayout {
             buffer_origin: (0.0, 0.0),
             buffer_extents: (0.0, 0.0),
             status_bar_origin: (0.0, 0.0),
-            status_bar_extents: (0.0, 0.0)
+            status_bar_extents: (0.0, 0.0),
+            file_tree_origin: (0.0, 0.0),
+            file_tree_extents: (0.0, 0.0)
         }
     }
 }
 impl EditorLayout {
     pub fn new(width: f32, height: f32, font_height: f32) -> Self {
+        let file_tree_width = width / 7.5;
         Self {
             layout_origin: (0.0, 0.0),
             layout_extents: (width, height),
-            buffer_origin: (0.0, 0.0),
-            buffer_extents: (width, height - font_height),
+            buffer_origin: (file_tree_width, 0.0),
+            buffer_extents: (width - file_tree_width, height - font_height),
             status_bar_origin: (0.0, height - font_height),
-            status_bar_extents: (width, font_height)
+            status_bar_extents: (width, font_height),
+            file_tree_origin: (0.0, 0.0),
+            file_tree_extents: (file_tree_width, height - font_height)
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RegionType {
+    Display = 0,
+    Text = 1,
+    ResizableBorder = 2,
+    Unknown = 3
+}
+
+impl RegionType {
+    pub fn from_usize(uint: usize) -> Self {
+        match uint {
+            0 => Self::Display,
+            1 => Self::Text,
+            2 => Self::ResizableBorder,
+            _ => Self::Unknown
+        }
+    }
+
+    pub fn to_usize(region_type: Self) -> usize {
+        match region_type {
+            Self::Display => 0,
+            Self::Text => 1,
+            Self::ResizableBorder => 2,
+            Self::Unknown => 3
         }
     }
 }
@@ -80,9 +117,15 @@ pub struct Editor {
     lsp_client: Option<LSPClient>,
 
     status_bar: StatusBar,
+    file_tree: FileTree,
+
     buffers: HashMap<String, TextBuffer>,
     current_buffer: String,
 
+    region_type: RegionType,
+
+    mouse_pos: (f32, f32),
+    mouse_pos_captured: bool,
     force_visible_caret_timer: u32,
     caret_is_visible: bool
 }
@@ -104,9 +147,14 @@ impl Editor {
             lsp_client: None,
 
             status_bar: StatusBar::new(layout.status_bar_origin, layout.status_bar_extents, renderer.clone()),
+            file_tree: FileTree::new("C:/", layout.file_tree_origin, layout.file_tree_extents, renderer.clone()),
+
             buffers: HashMap::new(),
             current_buffer: "".to_owned(),
 
+            region_type: RegionType::Display,
+            mouse_pos: (0.0, 0.0),
+            mouse_pos_captured: false,
             force_visible_caret_timer: 0,
             caret_is_visible: true
         }
@@ -165,19 +213,21 @@ impl Editor {
 
     pub fn draw(&mut self) {
         if let Some(buffer) = self.buffers.get_mut(&self.current_buffer) {
-            self.renderer.borrow().draw(&self.layout, buffer, &mut self.status_bar, self.caret_is_visible);
+            self.renderer.borrow().draw(buffer, &mut self.status_bar, &mut self.file_tree, self.caret_is_visible);
         }
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
+        self.renderer.borrow_mut().resize(width, height);
+
         self.layout = EditorLayout::new(
             self.renderer.borrow().pixel_size.width as f32,
             self.renderer.borrow().pixel_size.height as f32,
             self.renderer.borrow().font_height);
 
         self.status_bar.resize(self.layout.status_bar_origin, self.layout.status_bar_extents);
+        self.file_tree.resize(self.layout.file_tree_origin, self.layout.file_tree_extents);
 
-        self.renderer.borrow_mut().resize(width, height);
         for buffer in self.buffers.values_mut() {
             buffer.on_refresh_metrics(
                 self.layout.buffer_origin,
@@ -186,11 +236,23 @@ impl Editor {
         }
     }
 
+    pub fn capture_mouse(&mut self) {
+        self.mouse_pos_captured = true;
+    }
+
+    pub fn release_mouse(&mut self) {
+        self.mouse_pos_captured = false;
+    }
+
     pub fn selection_active(&self) -> bool {
         if let Some(buffer) = self.buffers.get(&self.current_buffer) {
             return buffer.currently_selecting;
         }
         false
+    }
+
+    pub fn mouse_left_window(&mut self) {
+        self.region_type = RegionType::Unknown;
     }
 
     fn handle_response_error(&mut self, request_type: LSPRequestType, response_error: &ResponseError) {
@@ -296,12 +358,6 @@ impl Editor {
         }
     }
 
-    fn inside_buffer_region(layout: &EditorLayout, pos: (f32, f32)) -> bool {
-        let horizontal_range = layout.buffer_origin.0..(layout.buffer_origin.0 + layout.buffer_extents.0);
-        let vertical_range = layout.buffer_origin.1..(layout.buffer_origin.1 + layout.buffer_extents.1);
-        return horizontal_range.contains(&pos.0) && vertical_range.contains(&pos.1);
-    }
-
     fn force_caret_visible(caret_is_visible: &mut bool, caret_timer: &mut u32) {
         if *caret_is_visible {
             *caret_timer = 1;
@@ -321,7 +377,13 @@ impl Editor {
             renderer.font_height);
     }
 
-    pub fn execute_command(&mut self, cmd: &EditorCommand) {
+    fn inside_region(pos: (f32, f32), origin: (f32, f32), extents: (f32, f32)) -> bool {
+        let horizontal_range = origin.0..(origin.0 + extents.0);
+        let vertical_range = origin.1..(origin.1 + extents.1);
+        horizontal_range.contains(&pos.0) && vertical_range.contains(&pos.1)
+    }
+
+    fn execute_buffer_command(&mut self, cmd: &EditorCommand) {
         if let Some(buffer) = self.buffers.get_mut(&self.current_buffer) {
             match *cmd {
                 EditorCommand::CaretVisible | EditorCommand::CaretInvisible if self.force_visible_caret_timer > 0 => {
@@ -355,17 +417,13 @@ impl Editor {
                     }
                 },
                 EditorCommand::LeftClick(mouse_pos, shift_down) => {
-                    if Self::inside_buffer_region(&self.layout, mouse_pos) {
-                        buffer.left_click(mouse_pos, shift_down);
-                        Self::force_caret_visible(&mut self.caret_is_visible, &mut self.force_visible_caret_timer);
-                    }
+                    buffer.left_click(mouse_pos, shift_down);
+                    Self::force_caret_visible(&mut self.caret_is_visible, &mut self.force_visible_caret_timer);
                 },
                 EditorCommand::LeftDoubleClick(mouse_pos) => {
-                    if Self::inside_buffer_region(&self.layout, mouse_pos) {
-                        buffer.left_double_click(mouse_pos);
-                        Self::force_caret_visible(&mut self.caret_is_visible, &mut self.force_visible_caret_timer);
-                    }
-                }
+                    buffer.left_double_click(mouse_pos);
+                    Self::force_caret_visible(&mut self.caret_is_visible, &mut self.force_visible_caret_timer);
+                },
                 EditorCommand::LeftRelease => buffer.left_release(),
                 EditorCommand::MouseMove(mouse_pos) => {
                     if mouse_pos.1 > (self.layout.layout_origin.1 + self.layout.layout_extents.1) {
@@ -468,6 +526,55 @@ impl Editor {
             }
 
             buffer.on_editor_action();
+        }
+    }
+
+    fn execute_status_bar_command(&mut self, cmd: &EditorCommand) {
+
+    }
+
+    fn execute_file_tree_command(&mut self, cmd: &EditorCommand) {
+        
+    }
+
+    fn update_region_type(&mut self) {
+        if Self::inside_region(self.mouse_pos, self.layout.buffer_origin, self.layout.buffer_extents) {
+            if self.region_type != RegionType::Text {
+                unsafe { SendMessageW(self.hwnd, WM_REGION_CHANGED, RegionType::to_usize(RegionType::Text), 0); }
+                self.region_type = RegionType::Text;
+            }
+        }
+        else if Self::inside_region(self.mouse_pos, self.layout.status_bar_origin, self.layout.status_bar_extents) {
+            if self.region_type != RegionType::Display {
+                unsafe { SendMessageW(self.hwnd, WM_REGION_CHANGED, RegionType::to_usize(RegionType::Display), 0); }
+                self.region_type = RegionType::Display;
+            }
+        }
+        else if Self::inside_region(self.mouse_pos, self.layout.file_tree_origin, self.layout.file_tree_extents) {
+            if self.region_type != RegionType::Display {
+                unsafe { SendMessageW(self.hwnd, WM_REGION_CHANGED, RegionType::to_usize(RegionType::Display), 0); }
+                self.region_type = RegionType::Display;
+            }
+        }
+    }
+
+    pub fn execute_command(&mut self, cmd: &EditorCommand) {
+        match *cmd {
+            EditorCommand::MouseMove(mouse_pos) if !self.mouse_pos_captured => {
+                self.mouse_pos = mouse_pos;
+                self.update_region_type();
+            }
+            _ => {}
+        }
+
+        if Self::inside_region(self.mouse_pos, self.layout.buffer_origin, self.layout.buffer_extents) {
+            self.execute_buffer_command(cmd);
+        }
+        else if Self::inside_region(self.mouse_pos, self.layout.status_bar_origin, self.layout.status_bar_extents) {
+            self.execute_status_bar_command(cmd);
+        }
+        else if Self::inside_region(self.mouse_pos, self.layout.file_tree_origin, self.layout.file_tree_extents) {
+            self.execute_file_tree_command(cmd);
         }
     }
 }

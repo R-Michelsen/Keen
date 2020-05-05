@@ -9,7 +9,7 @@ use crate::settings::MAX_LSP_RESPONSE_SIZE;
 use std::{
     alloc::{alloc, Layout},
     io::{Read, Write},
-    process::{ChildStdin, Command, Stdio},
+    process::{Child, ChildStdin, Command, Stdio},
     thread,
     thread::JoinHandle,
 };
@@ -25,6 +25,7 @@ pub enum LSPRequestType {
 #[derive(Debug)]
 pub struct LSPClient {
     client_name: &'static str,
+    child_process: Child,
     request_id: i64,
     pub request_types: Vec<LSPRequestType>,
     stdin: ChildStdin,
@@ -41,14 +42,17 @@ impl LSPClient {
             .spawn()
             .unwrap();
 
+        // Take explicit ownership of the stdin/stdout handles
         let mut stdout = lsp.stdout.take().unwrap();
+        let stdin = lsp.stdin.take().unwrap();
         let hwnd_clone = hwnd as u64;
-
+        
         Self {
             client_name,
+            child_process: lsp,
             request_id: 0,
             request_types: Vec::new(),
-            stdin: lsp.stdin.take().unwrap(),
+            stdin,
             thread: thread::spawn(move || {
                 unsafe {
                     loop {

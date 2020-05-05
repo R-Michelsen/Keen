@@ -1,8 +1,8 @@
 use crate::settings;
 use crate::buffer::TextBuffer;
-use crate::editor::EditorLayout;
 use crate::theme::Theme;
 use crate::status_bar::StatusBar;
+use crate::file_tree::FileTree;
 use crate::lsp_structs::SemanticTokenTypes;
 
 use std::{
@@ -29,9 +29,10 @@ use winapi::{
             ID2D1Factory, ID2D1HwndRenderTarget, D2D1CreateFactory,
             ID2D1Brush, D2D1_LAYER_PARAMETERS,
             D2D1_LAYER_OPTIONS_INITIALIZE_FOR_CLEARTYPE,
-            D2D1_PRESENT_OPTIONS_NONE,
+            D2D1_PRESENT_OPTIONS_NONE, D2D1_ROUNDED_RECT,
             D2D1_POINT_2F, D2D1_MATRIX_3X2_F, D2D1_SIZE_U, D2D1_RECT_F,
             D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FEATURE_LEVEL_DEFAULT,
+            D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
             D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_USAGE_NONE,
             D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES,
             D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_ANTIALIAS_MODE_ALIASED,
@@ -63,6 +64,13 @@ macro_rules! dx_ok {
 }
 
 const IDENTITY_MATRIX: D2D1_MATRIX_3X2_F = D2D1_MATRIX_3X2_F { matrix: [[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]] };
+
+pub trait RenderableTextRegion {
+    fn get_rect(&self) -> D2D1_RECT_F;
+    fn get_origin(&self) -> (f32, f32);
+    fn get_layout(&mut self) -> *mut IDWriteTextLayout;
+    fn resize(&mut self, origin: (f32, f32), extents: (f32, f32));
+}
 
 pub struct TextRenderer {
     dpi_scale: f32,
@@ -296,8 +304,6 @@ impl TextRenderer {
     fn draw_enclosing_brackets(&self, origin: (f32, f32), text_layout: *mut IDWriteTextLayout, enclosing_bracket_positions: [Option<usize>; 2]) {
         unsafe {
             let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
-            (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
-
             for bracket_pos in &enclosing_bracket_positions {
                 match bracket_pos {
                     Some(pos) => {
@@ -317,9 +323,15 @@ impl TextRenderer {
                             right: origin.0 + metrics.left + metrics.width,
                             bottom: origin.1 + metrics.top + metrics.height
                         };
+
+                        let rounded_rect = D2D1_ROUNDED_RECT {
+                            rect: highlight_rect,
+                            radiusX: 5.0,
+                            radiusY: 5.0
+                        };
             
-                        (*self.target).DrawRectangle(
-                            &highlight_rect, 
+                        (*self.target).DrawRoundedRectangle(
+                            &rounded_rect, 
                             self.theme.bracket_brush as *mut ID2D1Brush, 
                             self.theme.bracket_rect_width, 
                             null_mut()
@@ -328,12 +340,29 @@ impl TextRenderer {
                     None => {}
                 }
             }
-
-            (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
         }
     }
 
-    pub fn draw(&self, editor_layout: &EditorLayout, text_buffer: &mut TextBuffer, status_bar: &mut StatusBar, draw_caret: bool) {
+    fn draw_renderable_region<T>(&self, region: &mut T, background_brush: *mut ID2D1Brush, text_brush: *mut ID2D1Brush) where T: RenderableTextRegion {
+        unsafe {
+            let rect = region.get_rect();
+            (*self.target).FillRectangle(&rect, background_brush as *mut ID2D1Brush);
+
+            let (origin_x, origin_y) = region.get_origin();
+            let layout = region.get_layout();
+            (*self.target).DrawTextLayout(
+                D2D1_POINT_2F {
+                    x: origin_x,
+                    y: origin_y
+                },
+                layout,
+                text_brush as *mut ID2D1Brush,
+                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
+            );
+        }
+    }
+
+    pub fn draw(&self, text_buffer: &mut TextBuffer, status_bar: &mut StatusBar, file_tree: &mut FileTree, draw_caret: bool) {
         unsafe {
             (*self.target).BeginDraw();
 
@@ -408,25 +437,8 @@ impl TextRenderer {
             }
             (*self.target).PopLayer();
 
-            let status_bar_rect = D2D1_RECT_F {
-                left: (*editor_layout).status_bar_origin.0,
-                top: (*editor_layout).status_bar_origin.1,
-                right: (*editor_layout).status_bar_origin.0 + (*editor_layout).status_bar_extents.0,
-                bottom: (*editor_layout).status_bar_origin.1 + (*editor_layout).status_bar_extents.1,
-            };
-            (*self.target).FillRectangle(&status_bar_rect, self.theme.status_bar_brush as *mut ID2D1Brush);
-
-            let status_bar_layout = status_bar.get_layout(text_buffer.path.as_str());
-
-            (*self.target).DrawTextLayout(
-                D2D1_POINT_2F {
-                    x: (*editor_layout).status_bar_origin.0,
-                    y: (*editor_layout).status_bar_origin.1
-                },
-                status_bar_layout,
-                self.theme.text_brush as *mut ID2D1Brush,
-                D2D1_DRAW_TEXT_OPTIONS_NONE
-            );
+            self.draw_renderable_region(status_bar, self.theme.status_bar_brush as *mut ID2D1Brush, self.theme.text_brush as *mut ID2D1Brush);
+            self.draw_renderable_region(file_tree, self.theme.status_bar_brush as *mut ID2D1Brush, self.theme.text_brush as *mut ID2D1Brush);
 
             (*self.target).EndDraw(null_mut(), null_mut());
         }
