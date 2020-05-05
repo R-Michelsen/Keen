@@ -12,7 +12,7 @@ Keen - A minimalist text editor in Rust
 # Current Feature-Set
 - Basic text editor functionality, excluding search and multiple cursors
 - Semantic syntax highlighting for C++ and Rust (using the [Language Server Protocol](https://microsoft.github.io/language-server-protocol/))
-- DirectWrite font rendering with arbitrary scalability and font ligatures.
+- DirectWrite font rendering with arbitrary font scaling and font ligatures.
 
 ## Current state
 ![](media/Editor.png)
