@@ -1,11 +1,13 @@
-use crate::dx_ok;
-use crate::settings::{NUMBER_OF_SPACES_PER_TAB, AUTOCOMPLETE_BRACKETS};
-use crate::lsp_structs::{DidChangeNotification, TextDocumentContentChangeEvent, 
-                    VersionedTextDocumentIdentifier, SemanticTokenTypes, CppSemanticTokenTypes, 
-                    RustSemanticTokenTypes, RustSemanticTokenModifiers};
-use crate::language_support::{CPP_LANGUAGE_IDENTIFIER, RUST_LANGUAGE_IDENTIFIER, LexicalHighlights, highlight_text};
-use crate::renderer::TextRenderer;
-use crate::text_utils;
+use crate::{
+    hr_ok,
+    settings::{NUMBER_OF_SPACES_PER_TAB, AUTOCOMPLETE_BRACKETS},
+    lsp_structs::{DidChangeNotification, TextDocumentContentChangeEvent, 
+             VersionedTextDocumentIdentifier, SemanticTokenTypes, CppSemanticTokenTypes, 
+             RustSemanticTokenTypes, RustSemanticTokenModifiers},
+    language_support::{CPP_LANGUAGE_IDENTIFIER, RUST_LANGUAGE_IDENTIFIER, LexicalHighlights, highlight_text},
+    renderer::TextRenderer,
+    text_utils
+};
 
 use std::{
     cell::RefCell,
@@ -369,7 +371,7 @@ impl TextBuffer {
             let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
 
             unsafe {
-                dx_ok!(
+                hr_ok!(
                     (*self.text_layout).HitTestPoint(
                         relative_mouse_pos.0,
                         relative_mouse_pos.1,
@@ -760,7 +762,7 @@ impl TextBuffer {
         let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
 
         unsafe {
-            dx_ok!((*self.text_layout).HitTestTextPosition(
+            hr_ok!((*self.text_layout).HitTestTextPosition(
                 (self.caret_char_pos - self.absolute_char_pos_start) as u32,
                 self.caret_is_trailing,
                 &mut caret_pos.0,
@@ -902,7 +904,7 @@ impl TextBuffer {
                 (*self.text_layout).Release();
             }
 
-            dx_ok!((*self.renderer.borrow().write_factory).CreateTextLayout(
+            hr_ok!((*self.renderer.borrow().write_factory).CreateTextLayout(
                 lines.as_ptr(),
                 lines.len() as u32,
                 self.renderer.borrow().text_format,
@@ -930,7 +932,7 @@ impl TextBuffer {
                 (*self.line_numbers_layout).Release();
             }
 
-            dx_ok!((*self.renderer.borrow().write_factory).CreateTextLayout(
+            hr_ok!((*self.renderer.borrow().write_factory).CreateTextLayout(
                 lines.as_ptr(),
                 lines.len() as u32,
                 self.renderer.borrow().text_format,

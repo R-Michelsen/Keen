@@ -1,5 +1,7 @@
-use crate::lsp_structs::SemanticTokenTypes;
-use crate::text_utils;
+use crate::{
+    lsp_structs::SemanticTokenTypes,
+    text_utils
+};
 
 use std::collections::HashMap;
 

@@ -1,10 +1,12 @@
-use crate::language_support::{CPP_LSP_SERVER, RUST_LSP_SERVER};
-use crate::lsp_structs::{ClangdInitializationOptions, InitializeRequest, InitializeParams, 
-    ClientInfo, ClientCapabilities, TextDocumentClientCapabilities, SemanticTokensRequest,
-    DidOpenNotification, InitializeNotification, DidChangeNotification};
-use crate::WM_LSP_RESPONSE;
-use crate::WM_LSP_CRASH;
-use crate::settings::MAX_LSP_RESPONSE_SIZE;
+use crate::{
+    language_support::{CPP_LSP_SERVER, RUST_LSP_SERVER},
+    lsp_structs::{ClangdInitializationOptions, InitializeRequest, InitializeParams, 
+     ClientInfo, ClientCapabilities, TextDocumentClientCapabilities, SemanticTokensRequest,
+     DidOpenNotification, InitializeNotification, DidChangeNotification},
+    WM_LSP_RESPONSE,
+    WM_LSP_CRASH,
+    settings::MAX_LSP_RESPONSE_SIZE,
+};
 
 use std::{
     alloc::{alloc, Layout},

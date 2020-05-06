@@ -1,6 +1,8 @@
-use crate::renderer::{TextRenderer, RenderableTextRegion};
-use crate::text_utils;
-use crate::dx_ok;
+use crate::{
+    renderer::{TextRenderer, RenderableTextRegion},
+    text_utils,
+    hr_ok
+};
 
 use std::{
     cell::RefCell,
@@ -42,7 +44,7 @@ impl RenderableTextRegion for StatusBar {
 
             let status_string = text_utils::to_os_str("Text");
 
-            dx_ok!((*self.renderer.borrow().write_factory).CreateTextLayout(
+            hr_ok!((*self.renderer.borrow().write_factory).CreateTextLayout(
                 status_string.as_ptr(),
                 status_string.len() as u32,
                 self.renderer.borrow().text_format,

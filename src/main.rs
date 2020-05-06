@@ -35,6 +35,10 @@ use std::{
 
 use winapi::{
     um::{
+        combaseapi::{
+            CoInitializeEx,
+            CoUninitialize
+        },
         winuser::{
             SetWindowLongPtrW, GetWindowLongPtrW,
             UnregisterClassW, DispatchMessageW,
@@ -84,16 +88,15 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
     if msg == WM_CREATE {
         let create = lparam as *mut CREATESTRUCTW;
         let uninit_editor = (*create).lpCreateParams as *mut Box<MaybeUninit<Editor>>;
-        
+
         // Create the editor
         (*uninit_editor).as_mut_ptr().write(Editor::new(hwnd));
         
         // Set the box to be carried over to subsequent callbacks
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, (*uninit_editor).as_mut_ptr() as isize);
         editor = (*uninit_editor).as_mut_ptr();
-        // (*editor).open_file("C:/Users/Rasmus/Desktop/Yarr/source/AppEditorLogic.cpp");
-        // (*editor).open_file("C:/llvm-project/clang/lib/CodeGen/CGBuiltin.cpp");
-        (*editor).open_file("C:/Users/Rasmus/Desktop/Keen/src/buffer.rs");
+
+        (*editor).draw();
     }
     else {
         editor = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Editor;
@@ -106,11 +109,13 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
     match msg {
         WM_REGION_CHANGED => {
             match RegionType::from_usize(wparam) {
-                RegionType::Display => { SetCursor(LoadCursorW(null_mut(), IDC_ARROW)); },
-                RegionType::Text => { SetCursor(LoadCursorW(null_mut(), IDC_IBEAM)); },
+                RegionType::FileTree => { SetCursor(LoadCursorW(null_mut(), IDC_ARROW)); },
+                RegionType::TextBuffer => { SetCursor(LoadCursorW(null_mut(), IDC_IBEAM)); },
                 RegionType::ResizableBorder => { SetCursor(LoadCursorW(null_mut(), IDC_SIZEWE)); }
+                RegionType::StatusBar => { SetCursor(LoadCursorW(null_mut(), IDC_ARROW)); }
                 RegionType::Unknown => {}
             }
+            InvalidateRect(hwnd, null_mut(), false as i32);
             0
         }
         WM_LSP_RESPONSE => {
@@ -245,6 +250,10 @@ fn main() {
     unsafe {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
+        // Start up the COM library, necessary for file dialogs
+        // 2 | 4 = COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE
+        CoInitializeEx(null_mut(), 2 | 4);
+
         let wnd_name: Vec<u16> = OsStr::new("Keen").encode_wide().chain(once(0)).collect();
         let wnd_class_name: Vec<u16> = OsStr::new("Keen_Class").encode_wide().chain(once(0)).collect();
 
@@ -322,6 +331,7 @@ fn main() {
             println!("Caret blink thread failed with error: {:?}", panic);
         }
 
+        CoUninitialize();
         UnregisterClassW(wnd_class_name.as_ptr(), 0 as HINSTANCE);
         DestroyWindow(hwnd);
     }

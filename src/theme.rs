@@ -1,4 +1,4 @@
-use crate::dx_ok;
+use crate::hr_ok;
 
 use std::ptr::null_mut;
 use winapi::{
@@ -111,22 +111,22 @@ impl Theme {
         };
 
         unsafe {
-            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_TEXT_COLOR, &brush_properties, &mut theme.text_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_STATUS_BAR_COLOR, &brush_properties, &mut theme.status_bar_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_BRACKET_COLOR, &brush_properties, &mut theme.bracket_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_LINE_NUMBER_COLOR, &brush_properties, &mut theme.line_number_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_CARET_COLOR, &brush_properties, &mut theme.caret_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_SELECTION_COLOR, &brush_properties, &mut theme.selection_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_VARIABLE_COLOR, &brush_properties, &mut theme.variable_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_FUNCTION_COLOR, &brush_properties, &mut theme.function_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_METHOD_COLOR, &brush_properties, &mut theme.method_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_CLASS_COLOR, &brush_properties, &mut theme.class_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_ENUM_COLOR, &brush_properties, &mut theme.enum_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_COMMENT_COLOR, &brush_properties, &mut theme.comment_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_KEYWORD_COLOR, &brush_properties, &mut theme.keyword_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_LITERAL_COLOR, &brush_properties, &mut theme.literal_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_MACRO_PREPROCESSOR_COLOR, &brush_properties, &mut theme.macro_preprocessor_brush as *mut *mut _));
-            dx_ok!((*target).CreateSolidColorBrush(&DEFAULT_PRIMITIVE_COLOR, &brush_properties, &mut theme.primitive_brush as *mut *mut _));
+            hr_ok!((*target).CreateSolidColorBrush(&DEFAULT_TEXT_COLOR, &brush_properties, &mut theme.text_brush as *mut *mut _));
+            hr_ok!((*target).CreateSolidColorBrush(&DEFAULT_STATUS_BAR_COLOR, &brush_properties, &mut theme.status_bar_brush as *mut *mut _));
+            hr_ok!((*target).CreateSolidColorBrush(&DEFAULT_BRACKET_COLOR, &brush_properties, &mut theme.bracket_brush as *mut *mut _));
+            hr_ok!((*target).CreateSolidColorBrush(&DEFAULT_LINE_NUMBER_COLOR, &brush_properties, &mut theme.line_number_brush as *mut *mut _));
+            hr_ok!((*target).CreateSolidColorBrush(&DEFAULT_CARET_COLOR, &brush_properties, &mut theme.caret_brush as *mut *mut _));
+            hr_ok!((*target).CreateSolidColorBrush(&DEFAULT_SELECTION_COLOR, &brush_properties, &mut theme.selection_brush as *mut *mut _));
+            hr_ok!((*target).CreateSolidColorBrush(&DEFAULT_VARIABLE_COLOR, &brush_properties, &mut theme.variable_brush as *mut *mut _));
+            hr_ok!((*target).CreateSolidColorBrush(&DEFAULT_FUNCTION_COLOR, &brush_properties, &mut theme.function_brush as *mut *mut _));
+            hr_ok!((*target).CreateSolidColorBrush(&DEFAULT_METHOD_COLOR, &brush_properties, &mut theme.method_brush as *mut *mut _));
+            hr_ok!((*target).CreateSolidColorBrush(&DEFAULT_CLASS_COLOR, &brush_properties, &mut theme.class_brush as *mut *mut _));
+            hr_ok!((*target).CreateSolidColorBrush(&DEFAULT_ENUM_COLOR, &brush_properties, &mut theme.enum_brush as *mut *mut _));
+            hr_ok!((*target).CreateSolidColorBrush(&DEFAULT_COMMENT_COLOR, &brush_properties, &mut theme.comment_brush as *mut *mut _));
+            hr_ok!((*target).CreateSolidColorBrush(&DEFAULT_KEYWORD_COLOR, &brush_properties, &mut theme.keyword_brush as *mut *mut _));
+            hr_ok!((*target).CreateSolidColorBrush(&DEFAULT_LITERAL_COLOR, &brush_properties, &mut theme.literal_brush as *mut *mut _));
+            hr_ok!((*target).CreateSolidColorBrush(&DEFAULT_MACRO_PREPROCESSOR_COLOR, &brush_properties, &mut theme.macro_preprocessor_brush as *mut *mut _));
+            hr_ok!((*target).CreateSolidColorBrush(&DEFAULT_PRIMITIVE_COLOR, &brush_properties, &mut theme.primitive_brush as *mut *mut _));
         }
 
         theme

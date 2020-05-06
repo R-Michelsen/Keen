@@ -1,9 +1,11 @@
-use crate::settings;
-use crate::buffer::TextBuffer;
-use crate::theme::Theme;
-use crate::status_bar::StatusBar;
-use crate::file_tree::FileTree;
-use crate::lsp_structs::SemanticTokenTypes;
+use crate::{
+    settings,
+    buffer::TextBuffer,
+    theme::Theme,
+    status_bar::StatusBar,
+    file_tree::FileTree,
+    lsp_structs::SemanticTokenTypes
+};
 
 use std::{
     ptr::null_mut,
@@ -50,15 +52,15 @@ use winapi::{
 
 #[macro_export]
 #[cfg(debug_assertions)]
-macro_rules! dx_ok {
+macro_rules! hr_ok {
     ($e:expr) => {
-        assert!($e == 0, "DirectX call returned error code: 0x{:x}", $e as u32)
+        assert!($e == 0, "Call returned error code HRESULT: 0x{:x}", $e as u32)
     }
 }
 
 #[macro_export]
 #[cfg(not(debug_assertions))]
-macro_rules! dx_ok {
+macro_rules! hr_ok {
     ($e:expr) => {
         std::convert::identity($e)
     }
@@ -115,7 +117,7 @@ impl TextRenderer {
         };
 
         unsafe {
-            dx_ok!(
+            hr_ok!(
                 D2D1CreateFactory(
                     D2D1_FACTORY_TYPE_SINGLE_THREADED, 
                     &ID2D1Factory::uuidof(), null_mut(), 
@@ -155,11 +157,11 @@ impl TextRenderer {
                 presentOptions: D2D1_PRESENT_OPTIONS_NONE
             };
 
-            dx_ok!((*renderer.factory).CreateHwndRenderTarget(&target_props, &hwnd_props, &mut renderer.target as *mut *mut _)); 
+            hr_ok!((*renderer.factory).CreateHwndRenderTarget(&target_props, &hwnd_props, &mut renderer.target)); 
 
             renderer.theme = Theme::new_default(renderer.target);
 
-            dx_ok!(
+            hr_ok!(
                 DWriteCreateFactory(
                     DWRITE_FACTORY_TYPE_SHARED, 
                     &IDWriteFactory::uuidof(), 
@@ -204,7 +206,7 @@ impl TextRenderer {
                 (*self.text_format).Release();
             }
 
-            dx_ok!((*self.write_factory).CreateTextFormat(
+            hr_ok!((*self.write_factory).CreateTextFormat(
                 self.font_name.as_ptr(),
                 null_mut(),
                 DWRITE_FONT_WEIGHT_NORMAL,
@@ -212,11 +214,11 @@ impl TextRenderer {
                 DWRITE_FONT_STRETCH_NORMAL,
                 self.font_size,
                 self.font_locale.as_ptr(),
-                &mut self.text_format as *mut *mut _
+                &mut self.text_format
             ));
-            dx_ok!((*self.text_format).SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING));
-            dx_ok!((*self.text_format).SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR));
-            dx_ok!((*self.text_format).SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP));
+            hr_ok!((*self.text_format).SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING));
+            hr_ok!((*self.text_format).SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR));
+            hr_ok!((*self.text_format).SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP));
         }
 
         self.update_font_metrics();
@@ -226,18 +228,18 @@ impl TextRenderer {
         static GLYPH_CHAR: u16 = 0x0061;
         unsafe {
             let mut test_text_layout: *mut IDWriteTextLayout = null_mut();
-            dx_ok!((*self.write_factory).CreateTextLayout(
+            hr_ok!((*self.write_factory).CreateTextLayout(
                 &GLYPH_CHAR,
                 1,
                 self.text_format,
                 0.0,
                 0.0,
-                &mut test_text_layout as *mut *mut _
+                &mut test_text_layout
             ));
 
             let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
             let mut dummy: (f32, f32) = (0.0, 0.0);
-            dx_ok!((*test_text_layout).HitTestTextPosition(
+            hr_ok!((*test_text_layout).HitTestTextPosition(
                 0,
                 0,
                 &mut dummy.0,
@@ -250,7 +252,7 @@ impl TextRenderer {
             self.font_width = metrics.width;
             self.font_height = metrics.height;
 
-            dx_ok!((*self.text_format).SetIncrementalTabStop(self.font_width * settings::NUMBER_OF_SPACES_PER_TAB as f32));
+            hr_ok!((*self.text_format).SetIncrementalTabStop(self.font_width * settings::NUMBER_OF_SPACES_PER_TAB as f32));
         }
     }
 
@@ -272,7 +274,7 @@ impl TextRenderer {
             let mut hit_tests : Vec<DWRITE_HIT_TEST_METRICS> = Vec::with_capacity(hit_test_count as usize);
             hit_tests.set_len(hit_test_count as usize);
 
-            dx_ok!(
+            hr_ok!(
                 (*text_layout).HitTestTextRange(
                     range.startPosition,
                     range.length,
@@ -307,7 +309,7 @@ impl TextRenderer {
         let mut dummy = (0.0, 0.0);
 
         unsafe {
-            dx_ok!((*text_layout).HitTestTextPosition(
+            hr_ok!((*text_layout).HitTestTextPosition(
                 pos,
                 false as i32,
                 &mut dummy.0,
@@ -385,88 +387,99 @@ impl TextRenderer {
                 },
                 layout,
                 text_brush as *mut ID2D1Brush,
-                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT | D2D1_DRAW_TEXT_OPTIONS_CLIP
+                D2D1_DRAW_TEXT_OPTIONS_CLIP | D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
             );
         }
     }
 
-    pub fn draw(&self, text_buffer: &mut TextBuffer, status_bar: &mut StatusBar, file_tree: &mut FileTree, draw_caret: bool) {
+    pub fn draw(&self, text_buffer: Option<&mut TextBuffer>, status_bar: &mut StatusBar, file_tree: &mut FileTree, draw_caret: bool) {
+
         unsafe {
             (*self.target).BeginDraw();
 
             (*self.target).SetTransform(&IDENTITY_MATRIX);
             (*self.target).Clear(&self.theme.background_color);
 
-            // Push the line numbers layer params before drawing
-            let (line_numbers_layout, line_numbers_layer_params) = text_buffer.get_line_numbers_layout();
-            (*self.target).PushLayer(&line_numbers_layer_params, null_mut());
-            (*self.target).DrawTextLayout(
-                D2D1_POINT_2F { 
-                    x: text_buffer.line_numbers_origin.0,
-                    y: text_buffer.line_numbers_origin.1
-                },
-                line_numbers_layout,
-                self.theme.line_number_brush as *mut ID2D1Brush,
-                D2D1_DRAW_TEXT_OPTIONS_NONE
-            );
-            (*self.target).PopLayer();
+            if let Some(buffer) = text_buffer {
+                // Push the line numbers layer params before drawing
+                let (line_numbers_layout, line_numbers_layer_params) = buffer.get_line_numbers_layout();
+                (*self.target).PushLayer(&line_numbers_layer_params, null_mut());
+                (*self.target).DrawTextLayout(
+                    D2D1_POINT_2F { 
+                        x: buffer.line_numbers_origin.0,
+                        y: buffer.line_numbers_origin.1
+                    },
+                    line_numbers_layout,
+                    self.theme.line_number_brush as *mut ID2D1Brush,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE
+                );
+                (*self.target).PopLayer();
 
-            // Push the text layer params before drawing
-            let (text_layout, text_layer_params) = text_buffer.get_text_layout();
-            (*self.target).PushLayer(&text_layer_params, null_mut());
+                // Push the text layer params before drawing
+                let (text_layout, text_layer_params) = buffer.get_text_layout();
+                (*self.target).PushLayer(&text_layer_params, null_mut());
 
-            let lexical_highlights = text_buffer.get_lexical_highlights();
-            let semantic_highlights = text_buffer.get_semantic_highlights();
-            // In case of overlap, lexical highlights trump semantic for now.
-            // This is to ensure that commenting out big sections of code happen
-            // instantaneously
-            for (range, token_type) in semantic_highlights.into_iter().chain(lexical_highlights.highlight_tokens) {
-                match token_type {
-                    SemanticTokenTypes::None | SemanticTokenTypes::Variable          
-                                                          => {},
-                    SemanticTokenTypes::Function          => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.function_brush as *mut IUnknown, range)); },
-                    SemanticTokenTypes::Method            => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.method_brush as *mut IUnknown, range)); },
-                    SemanticTokenTypes::Class             => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.class_brush as *mut IUnknown, range)); },
-                    SemanticTokenTypes::Enum              => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.enum_brush as *mut IUnknown, range)); },
-                    SemanticTokenTypes::Comment           => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.comment_brush as *mut IUnknown, range)); },
-                    SemanticTokenTypes::Keyword           => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.keyword_brush as *mut IUnknown, range)); },
-                    SemanticTokenTypes::Literal           => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.literal_brush as *mut IUnknown, range)); },
-                    SemanticTokenTypes::Macro | SemanticTokenTypes::Preprocessor             
-                                                          => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.macro_preprocessor_brush as *mut IUnknown, range)); },
-                    SemanticTokenTypes::Primitive         => { dx_ok!((*text_layout).SetDrawingEffect(self.theme.primitive_brush as *mut IUnknown, range)); }
+                let lexical_highlights = buffer.get_lexical_highlights();
+                let semantic_highlights = buffer.get_semantic_highlights();
+                // In case of overlap, lexical highlights trump semantic for now.
+                // This is to ensure that commenting out big sections of code happen
+                // instantaneously
+                for (range, token_type) in semantic_highlights.into_iter().chain(lexical_highlights.highlight_tokens) {
+                    match token_type {
+                        SemanticTokenTypes::None | SemanticTokenTypes::Variable          
+                                                            => {},
+                        SemanticTokenTypes::Function          => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.function_brush as *mut IUnknown, range)); },
+                        SemanticTokenTypes::Method            => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.method_brush as *mut IUnknown, range)); },
+                        SemanticTokenTypes::Class             => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.class_brush as *mut IUnknown, range)); },
+                        SemanticTokenTypes::Enum              => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.enum_brush as *mut IUnknown, range)); },
+                        SemanticTokenTypes::Comment           => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.comment_brush as *mut IUnknown, range)); },
+                        SemanticTokenTypes::Keyword           => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.keyword_brush as *mut IUnknown, range)); },
+                        SemanticTokenTypes::Literal           => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.literal_brush as *mut IUnknown, range)); },
+                        SemanticTokenTypes::Macro | SemanticTokenTypes::Preprocessor             
+                                                            => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.macro_preprocessor_brush as *mut IUnknown, range)); },
+                        SemanticTokenTypes::Primitive         => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.primitive_brush as *mut IUnknown, range)); }
+                    }
                 }
-            }
 
-            let view_origin = text_buffer.get_view_origin();
-
-            if let Some(selection_range) = text_buffer.get_selection_range() {
-                self.draw_selection_range(view_origin, text_layout, selection_range);
-            }
-            if let Some(enclosing_bracket_ranges) = lexical_highlights.enclosing_brackets {
-                self.draw_enclosing_brackets(view_origin, text_layout, enclosing_bracket_ranges)
-            }
-
-            (*self.target).DrawTextLayout(
-                D2D1_POINT_2F { 
-                    x: view_origin.0,
-                    y: view_origin.1
-                },
-                text_layout,
-                self.theme.text_brush as *mut ID2D1Brush,
-                D2D1_DRAW_TEXT_OPTIONS_NONE
-            );
-
-            if draw_caret {
-                if let Some(rect) = text_buffer.get_caret_rect() {
-                    (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
-                    (*self.target).FillRectangle(&rect, self.theme.caret_brush as *mut ID2D1Brush);
-                    (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                let view_origin = buffer.get_view_origin();
+                if let Some(selection_range) = buffer.get_selection_range() {
+                    self.draw_selection_range(view_origin, text_layout, selection_range);
                 }
+                if let Some(enclosing_bracket_ranges) = lexical_highlights.enclosing_brackets {
+                    self.draw_enclosing_brackets(view_origin, text_layout, enclosing_bracket_ranges)
+                }
+
+                (*self.target).DrawTextLayout(
+                    D2D1_POINT_2F { 
+                        x: view_origin.0,
+                        y: view_origin.1
+                    },
+                    text_layout,
+                    self.theme.text_brush as *mut ID2D1Brush,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE
+                );
+
+                if draw_caret {
+                    if let Some(rect) = buffer.get_caret_rect() {
+                        (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+                        (*self.target).FillRectangle(&rect, self.theme.caret_brush as *mut ID2D1Brush);
+                        (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                    }
+                }
+                (*self.target).PopLayer();
             }
-            (*self.target).PopLayer();
 
             self.draw_renderable_region(status_bar, self.theme.status_bar_brush as *mut ID2D1Brush, self.theme.text_brush as *mut ID2D1Brush);
+
             self.draw_renderable_region(file_tree, self.theme.status_bar_brush as *mut ID2D1Brush, self.theme.text_brush as *mut ID2D1Brush);
+
+            if let Some(hover_rect) = file_tree.hovered_line_rect {
+                (*self.target).FillRectangle(&hover_rect, self.theme.selection_brush as *mut ID2D1Brush);
+            }
+
+            // if let Some(file_tree_hover_selection) = file_tree.get_hover_line_selection() {
+            //     self.draw_selection_range(file_tree.origin, file_tree.get_layout(), file_tree_hover_selection);
+            // }
 
             (*self.target).EndDraw(null_mut(), null_mut());
         }

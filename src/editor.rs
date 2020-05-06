@@ -3,23 +3,38 @@ use std::{
     str,
     rc::Rc, 
     cell::RefCell,
-    path::Path
+    path::Path,
+    ptr::null_mut,
+    slice::from_raw_parts
 };
-use winapi::shared::windef::HWND;
-use winapi::um::winuser::{VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_TAB, VK_RETURN, VK_DELETE, VK_BACK, SendMessageW};
+use winapi::{
+    Class,
+    Interface,
+    ctypes::c_void,
+    shared::windef::HWND,
+    um::{
+        combaseapi::{CoCreateInstance, CLSCTX_ALL},
+        shobjidl::{IFileOpenDialog, FOS_PICKFOLDERS},
+        shobjidl_core::{IShellItem, FileOpenDialog, SIGDN_FILESYSPATH},
+        winuser::{VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_TAB, VK_RETURN, VK_DELETE, VK_BACK, InvalidateRect, SendMessageW}
+    }
+};
 
-use crate::WM_REGION_CHANGED;
-use crate::settings::{SCROLL_LINES_PER_MOUSEMOVE, SCROLL_LINES_PER_ROLL, 
-    NUMBER_OF_SPACES_PER_TAB, SCROLL_ZOOM_DELTA, RESIZABLE_BORDER_WIDTH};
-use crate::renderer::{TextRenderer, RenderableTextRegion};
-use crate::lsp_client::{LSPClient, LSPRequestType};
-use crate::lsp_structs::{GenericNotification, GenericRequest, GenericResponse, 
-    DidChangeNotification, ResponseError, SemanticTokenResult, ErrorCodes};
-use crate::language_support::{CPP_FILE_EXTENSIONS, CPP_LSP_SERVER, CPP_LANGUAGE_IDENTIFIER, 
-    RUST_LSP_SERVER, RUST_FILE_EXTENSIONS, RUST_LANGUAGE_IDENTIFIER};
-use crate::buffer::{TextBuffer, SelectionMode, MouseSelectionMode};
-use crate::status_bar::StatusBar;
-use crate::file_tree::FileTree;
+use crate::{
+    WM_REGION_CHANGED,
+    settings::{SCROLL_LINES_PER_MOUSEMOVE, SCROLL_LINES_PER_ROLL, 
+     NUMBER_OF_SPACES_PER_TAB, SCROLL_ZOOM_DELTA, RESIZABLE_BORDER_WIDTH},
+    renderer::{TextRenderer, RenderableTextRegion},
+    lsp_client::{LSPClient, LSPRequestType},
+    lsp_structs::{GenericNotification, GenericRequest, GenericResponse,
+     DidChangeNotification, ResponseError, SemanticTokenResult, ErrorCodes},
+    language_support::{CPP_FILE_EXTENSIONS, CPP_LSP_SERVER, CPP_LANGUAGE_IDENTIFIER, 
+     RUST_LSP_SERVER, RUST_FILE_EXTENSIONS, RUST_LANGUAGE_IDENTIFIER},
+    buffer::{TextBuffer, SelectionMode, MouseSelectionMode},
+    status_bar::StatusBar,
+    file_tree::FileTree,
+    hr_ok
+};
 
 type MousePos = (f32, f32);
 type ShiftDown = bool;
@@ -88,28 +103,31 @@ impl EditorLayout {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RegionType {
-    Display = 0,
-    Text = 1,
+    FileTree = 0,
+    TextBuffer = 1,
     ResizableBorder = 2,
-    Unknown = 3
+    StatusBar = 3,
+    Unknown = 4
 }
 
 impl RegionType {
     pub fn from_usize(uint: usize) -> Self {
         match uint {
-            0 => Self::Display,
-            1 => Self::Text,
+            0 => Self::FileTree,
+            1 => Self::TextBuffer,
             2 => Self::ResizableBorder,
+            3 => Self::StatusBar,
             _ => Self::Unknown
         }
     }
 
     pub fn to_usize(region_type: Self) -> usize {
         match region_type {
-            Self::Display => 0,
-            Self::Text => 1,
+            Self::FileTree => 0,
+            Self::TextBuffer => 1,
             Self::ResizableBorder => 2,
-            Self::Unknown => 3
+            Self::StatusBar => 3,
+            Self::Unknown => 4
         }
     }
 }
@@ -156,12 +174,12 @@ impl Editor {
             lsp_client: None,
 
             status_bar: StatusBar::new(layout.status_bar_origin, layout.status_bar_extents, renderer.clone()),
-            file_tree: FileTree::new("C:/", layout.file_tree_origin, layout.file_tree_extents, renderer.clone()),
+            file_tree: FileTree::new("", layout.file_tree_origin, layout.file_tree_extents, renderer.clone()),
 
             buffers: HashMap::new(),
             current_buffer: "".to_owned(),
 
-            region_type: RegionType::Display,
+            region_type: RegionType::Unknown,
 
             resizing_file_tree: false,
             resizing_file_tree_offset: 0.0,
@@ -225,9 +243,8 @@ impl Editor {
     }
 
     pub fn draw(&mut self) {
-        if let Some(buffer) = self.buffers.get_mut(&self.current_buffer) {
-            self.renderer.borrow().draw(buffer, &mut self.status_bar, &mut self.file_tree, self.caret_is_visible);
-        }
+        let buffer = self.buffers.get_mut(&self.current_buffer);
+        self.renderer.borrow().draw(buffer, &mut self.status_bar, &mut self.file_tree, self.caret_is_visible);
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -287,6 +304,45 @@ impl Editor {
 
     pub fn mouse_left_window(&mut self) {
         self.region_type = RegionType::Unknown;
+    }
+
+    fn open_workspace(&mut self) {
+        let mut file_dialog: *mut IFileOpenDialog = null_mut();
+
+        unsafe {
+            hr_ok!(
+                CoCreateInstance(
+                    &FileOpenDialog::uuidof(),
+                    null_mut(), 
+                    CLSCTX_ALL, 
+                    &IFileOpenDialog::uuidof(),
+                    (&mut file_dialog as *mut *mut _) as *mut *mut c_void
+                )
+            );
+
+            hr_ok!((*file_dialog).SetOptions(FOS_PICKFOLDERS));
+            hr_ok!((*file_dialog).Show(null_mut()));
+
+            let mut shell_item: *mut IShellItem = null_mut();
+            hr_ok!((*file_dialog).GetResult(&mut shell_item));
+
+            let mut folder_path: *mut u16 = null_mut();
+            hr_ok!((*shell_item).GetDisplayName(SIGDN_FILESYSPATH, &mut folder_path)); 
+
+            // We need to get the length of the folder path manually...
+            let mut length = 0;
+            while (*folder_path.add(length)) != 0x0000 {
+                length += 1;
+            }
+
+            let slice = from_raw_parts(folder_path, length);
+            self.file_tree.set_workspace_root(String::from_utf16_lossy(slice));
+
+            (*shell_item).Release();
+            (*file_dialog).Release();
+        }
+
+        self.open_file("C:/Users/Rasmus/Desktop/Keen/src/editor.rs");
     }
 
     fn handle_response_error(&mut self, request_type: LSPRequestType, response_error: &ResponseError) {
@@ -584,33 +640,51 @@ impl Editor {
     }
 
     fn execute_file_tree_command(&mut self, cmd: &EditorCommand) {
-        
+        match *cmd {
+            EditorCommand::MouseMove(mouse_pos) => {
+                if self.file_tree.update_hover_item(mouse_pos) {
+                    unsafe { InvalidateRect(self.hwnd, null_mut(), false as i32); }
+                }
+            }
+            _ => {}
+        }
     }
 
-    fn update_region_type(&mut self) {
+    fn get_region(&mut self) -> RegionType {
+        // The resizable border has to be the first check since it slightly
+        // overlaps the file tree and text buffer regions
         if Self::inside_region(self.mouse_pos, self.layout.resizable_border_origin, self.layout.resizable_border_extents) {
-            if self.region_type != RegionType::ResizableBorder {
-                unsafe { SendMessageW(self.hwnd, WM_REGION_CHANGED, RegionType::to_usize(RegionType::ResizableBorder), 0); }
-                self.region_type = RegionType::ResizableBorder;
-            }
+            RegionType::ResizableBorder
         }
         else if Self::inside_region(self.mouse_pos, self.layout.buffer_origin, self.layout.buffer_extents) {
-            if self.region_type != RegionType::Text {
-                unsafe { SendMessageW(self.hwnd, WM_REGION_CHANGED, RegionType::to_usize(RegionType::Text), 0); }
-                self.region_type = RegionType::Text;
+            if self.current_buffer.is_empty() {
+                RegionType::FileTree
+            }
+            else {
+                RegionType::TextBuffer
             }
         }
         else if Self::inside_region(self.mouse_pos, self.layout.status_bar_origin, self.layout.status_bar_extents) {
-            if self.region_type != RegionType::Display {
-                unsafe { SendMessageW(self.hwnd, WM_REGION_CHANGED, RegionType::to_usize(RegionType::Display), 0); }
-                self.region_type = RegionType::Display;
-            }
+            RegionType::StatusBar
         }
         else if Self::inside_region(self.mouse_pos, self.layout.file_tree_origin, self.layout.file_tree_extents) {
-            if self.region_type != RegionType::Display {
-                unsafe { SendMessageW(self.hwnd, WM_REGION_CHANGED, RegionType::to_usize(RegionType::Display), 0); }
-                self.region_type = RegionType::Display;
+            RegionType::FileTree
+        }
+        else {
+            RegionType::Unknown
+        }
+    }
+
+    fn update_region_type(&mut self) {
+        match self.get_region() {
+            region if region != self.region_type => {
+                if self.region_type == RegionType::FileTree {
+                    self.file_tree.clear_hover();
+                }
+                unsafe { SendMessageW(self.hwnd, WM_REGION_CHANGED, RegionType::to_usize(region), 0); }
+                self.region_type = region;
             }
+            _ => {}
         }
     }
 
@@ -619,6 +693,12 @@ impl Editor {
             EditorCommand::MouseMove(mouse_pos) if !self.mouse_pos_captured => {
                 self.mouse_pos = mouse_pos;
                 self.update_region_type();
+            }
+            EditorCommand::KeyPressed(key, _, ctrl_down) => { 
+                match (key, ctrl_down) {
+                    (0x4F, true) => self.open_workspace(),
+                    _ => {}
+                }
             }
             _ => {}
         }
