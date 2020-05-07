@@ -341,8 +341,6 @@ impl Editor {
             (*shell_item).Release();
             (*file_dialog).Release();
         }
-
-        self.open_file("C:/Users/Rasmus/Desktop/Keen/src/editor.rs");
     }
 
     fn handle_response_error(&mut self, request_type: LSPRequestType, response_error: &ResponseError) {
@@ -641,6 +639,18 @@ impl Editor {
 
     fn execute_file_tree_command(&mut self, cmd: &EditorCommand) {
         match *cmd {
+            EditorCommand::LeftClick(_, _) => {
+                if let Some(path) = self.file_tree.get_hovered_item() {
+                    let path_string = "file:///".to_owned() + path.to_str().unwrap();
+                    
+                    if self.buffers.contains_key(&path_string) {
+                        self.current_buffer = path_string;
+                    }
+                    else {
+                        self.open_file(path.to_str().unwrap());
+                    }
+                }
+            }
             EditorCommand::MouseMove(mouse_pos) => {
                 if self.file_tree.update_hover_item(mouse_pos) {
                     unsafe { InvalidateRect(self.hwnd, null_mut(), false as i32); }

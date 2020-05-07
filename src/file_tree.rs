@@ -9,7 +9,7 @@ use std::{
     os::windows::ffi::OsStrExt,
     rc::Rc,
     ptr::null_mut,
-    path::Path
+    path::{Path, PathBuf}
 };
 
 use winapi::um::{
@@ -27,6 +27,8 @@ pub struct FileTree {
     pub hovered_line_number: Option<usize>,
     pub hovered_line_rect: Option<D2D1_RECT_F>,
     line_metrics: Vec<DWRITE_LINE_METRICS>,
+
+    workspace_items: Vec<PathBuf>,
 
     renderer: Rc<RefCell<TextRenderer>>,
     text_layout: *mut IDWriteTextLayout,
@@ -67,6 +69,8 @@ impl FileTree {
             hovered_line_number: None,
             hovered_line_rect: None,
             line_metrics: Vec::new(),
+
+            workspace_items: Vec::new(),
 
             renderer,
             text_layout: null_mut()
@@ -167,6 +171,13 @@ impl FileTree {
         }
     }
 
+    pub fn get_hovered_item(&self) -> Option<PathBuf> {
+        if let Some(index) = self.hovered_line_number {
+            return Some(self.workspace_items[index].clone());
+        }
+        None
+    }
+
     pub fn set_workspace_root(&mut self, root: String) {
         self.root = root;
 
@@ -176,6 +187,7 @@ impl FileTree {
             for entry in entries {
                 match entry {
                     Ok(entry) => {
+                        self.workspace_items.push(entry.path());
                         if let Ok(file_type) = entry.file_type() {
                             if file_type.is_dir() {
                                 self.text.push(0xD83D);

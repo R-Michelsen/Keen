@@ -39,7 +39,7 @@ impl LSPClient {
         // Spawn an instance of the language server
         let mut lsp = Command::new(client_name)
             .stdin(Stdio::piped())
-            .stderr(Stdio::piped())
+            // .stderr(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
             .unwrap();
@@ -138,6 +138,7 @@ impl LSPClient {
     pub fn send_notification(&mut self, notification: &str) {
         let message = format!("Content-Length: {}\r\n\r\n{}", notification.len(), notification);
 
+        println!("{}", notification);
         // TODO: Handle IO errors
         self.stdin.write_all(message.as_bytes()).unwrap();
     }
