@@ -1,10 +1,7 @@
 use crate::{
     hr_ok,
     settings::{NUMBER_OF_SPACES_PER_TAB, AUTOCOMPLETE_BRACKETS},
-    lsp_structs::{DidChangeNotification, TextDocumentContentChangeEvent, 
-             VersionedTextDocumentIdentifier, SemanticTokenTypes, CppSemanticTokenTypes, 
-             RustSemanticTokenTypes, RustSemanticTokenModifiers},
-    language_support::{CPP_LANGUAGE_IDENTIFIER, RUST_LANGUAGE_IDENTIFIER, LexicalHighlights, highlight_text},
+    language_support::{LexicalHighlights, highlight_text},
     renderer::TextRenderer,
     text_utils
 };
@@ -102,9 +99,6 @@ pub struct TextBuffer {
     line_numbers_layout: *mut IDWriteTextLayout,
 
     renderer: Rc<RefCell<TextRenderer>>,
-
-    lsp_versioned_identifier: VersionedTextDocumentIdentifier,
-    semantic_tokens: Vec<u32>
 }
 
 impl TextBuffer {
@@ -157,34 +151,11 @@ impl TextBuffer {
             line_numbers_layer_params: unsafe { MaybeUninit::<D2D1_LAYER_PARAMETERS>::zeroed().assume_init() },
             line_numbers_layout: null_mut(),
 
-            renderer,
-
-            lsp_versioned_identifier: VersionedTextDocumentIdentifier {
-                uri: "file:///".to_owned() + path,
-                version: 1
-            },
-            semantic_tokens: Vec::new()
+            renderer
         };
 
         text_buffer.on_refresh_metrics(origin, extents);
         text_buffer
-    }
-
-    pub fn get_full_did_change_notification(&mut self) -> DidChangeNotification {
-        // Update the file version and return the change notification
-        let change_event = TextDocumentContentChangeEvent {
-            text: self.buffer.to_string(),
-            range: None
-        };
-        DidChangeNotification::new(self.next_versioned_identifer(), vec![change_event])
-    }
-
-    pub fn update_semantic_tokens(&mut self, data: Vec<u32>) {
-        self.semantic_tokens = data;
-    }
-
-    pub fn get_uri(&self) -> String {
-        self.lsp_versioned_identifier.uri.clone()
     }
 
     pub fn get_caret_absolute_pos(&self) -> usize {
@@ -409,40 +380,25 @@ impl TextBuffer {
         (dx, dy)
     }
 
-    pub fn delete_selection(&mut self) -> TextDocumentContentChangeEvent {
+    pub fn delete_selection(&mut self) {
         let caret_absolute_pos = self.get_caret_absolute_pos();
-        let line = self.buffer.char_to_line(caret_absolute_pos);
-        let char_pos = caret_absolute_pos - self.buffer.line_to_char(line);
 
-        let change_event = if caret_absolute_pos < self.caret_char_anchor {
-            let end_line = self.buffer.char_to_line(self.caret_char_anchor);
-            let end_char = self.caret_char_anchor - self.buffer.line_to_char(end_line);
+        if caret_absolute_pos < self.caret_char_anchor {
             self.buffer.remove(caret_absolute_pos..self.caret_char_anchor);
-
             self.caret_char_pos = caret_absolute_pos;
             self.caret_char_anchor = self.caret_char_pos;
-
-            TextDocumentContentChangeEvent::new_delete_event(line, char_pos, end_line, end_char)
         }
         else {
-            let start_line = self.buffer.char_to_line(self.caret_char_anchor);
-            let start_char = self.caret_char_anchor - self.buffer.line_to_char(start_line);
             self.buffer.remove(self.caret_char_anchor..caret_absolute_pos);
-
             let caret_anchor_delta = caret_absolute_pos - self.caret_char_anchor;
             self.caret_char_pos = caret_absolute_pos - caret_anchor_delta;
-
-            TextDocumentContentChangeEvent::new_delete_event(start_line, start_char, line, char_pos)
         };
 
-        self.preserve_semantic_line_highlights(line, self.get_current_line());
         self.caret_is_trailing = 0;
         self.update_view();
-
-        change_event
     }
 
-    pub fn insert_newline(&mut self) -> DidChangeNotification {
+    pub fn insert_newline(&mut self) {
         let offset = self.get_leading_whitespace_offset();
 
         // Search back for an open bracket, to see if auto indentation might
@@ -488,17 +444,15 @@ impl TextBuffer {
         self.insert_chars(format!("{}{}", "\r\n", " ".repeat(offset)).as_str())
     }
 
-    pub fn insert_bracket(&mut self, bracket_pair: (char, char)) -> DidChangeNotification {
+    pub fn insert_bracket(&mut self, bracket_pair: (char, char)) {
         // When inserting an opening bracket,
         // we will insert its corresponding closing bracket 
         // next to it.
-        let did_change_notification = 
-            self.insert_chars(format!("{}{}", bracket_pair.0, bracket_pair.1).as_str());
+        self.insert_chars(format!("{}{}", bracket_pair.0, bracket_pair.1).as_str());
         self.set_selection(SelectionMode::Left, 1, false);
-        did_change_notification
     }
 
-    pub fn insert_chars(&mut self, chars: &str) -> DidChangeNotification {
+    pub fn insert_chars(&mut self, chars: &str) {
         let mut changes = Vec::new();
 
         // If we are currently selecting text, 
@@ -507,20 +461,13 @@ impl TextBuffer {
             changes.push(self.delete_selection());
         }
         let caret_absolute_pos = self.get_caret_absolute_pos();
-        let line = self.buffer.char_to_line(caret_absolute_pos);
-        let char_pos = caret_absolute_pos - self.buffer.line_to_char(line);
 
         self.buffer.insert(caret_absolute_pos, chars);
         self.set_selection(SelectionMode::Right, chars.len(), false);
-        self.preserve_semantic_line_highlights(line, self.get_current_line());
         self.update_view();
-
-        let change_event = TextDocumentContentChangeEvent::new_insert_event(chars.to_owned(), line, char_pos, line, char_pos);
-        changes.push(change_event);
-        DidChangeNotification::new(self.next_versioned_identifer(), changes)
     }
 
-    pub fn insert_char(&mut self, character: u16) -> DidChangeNotification {
+    pub fn insert_char(&mut self, character: u16) {
         let mut changes = Vec::new();
         let chr = (character as u8) as char;
 
@@ -533,7 +480,8 @@ impl TextBuffer {
         let mut caret_absolute_pos = self.get_caret_absolute_pos();
         for brackets in &AUTOCOMPLETE_BRACKETS {
             if chr == brackets.0 {
-                return self.insert_bracket(*brackets);
+                self.insert_bracket(*brackets);
+                return;
             }
             // Special case when inserting a closing bracket
             // while the caret is next to closing bracket. Simply
@@ -541,7 +489,6 @@ impl TextBuffer {
             if chr == brackets.1 {
                 if self.buffer.char(caret_absolute_pos) == brackets.1 {
                     self.set_selection(SelectionMode::Right, 1, false);
-                    return DidChangeNotification::new(self.next_versioned_identifer(), changes);
                 }
                 // Otherwise if possible move the scope indent back once
                 else {
@@ -549,36 +496,26 @@ impl TextBuffer {
                     let current_char_pos = caret_absolute_pos - self.buffer.line_to_char(self.buffer.char_to_line(caret_absolute_pos));
                     if offset >= NUMBER_OF_SPACES_PER_TAB && current_char_pos == offset {
                         self.set_selection(SelectionMode::Left, NUMBER_OF_SPACES_PER_TAB, true);
-                        changes.push(self.delete_selection());
                     }
                 }
             }
         }
 
         caret_absolute_pos = self.get_caret_absolute_pos();
-        let line = self.buffer.char_to_line(caret_absolute_pos);
-        let char_pos = caret_absolute_pos - self.buffer.line_to_char(self.buffer.char_to_line(caret_absolute_pos));
 
         self.buffer.insert_char(caret_absolute_pos, chr);
         self.set_selection(SelectionMode::Right, 1, false);
-        self.preserve_semantic_char_highlights(line, char_pos);
         self.update_view();
-
-        let change_event = TextDocumentContentChangeEvent::new_insert_event(chr.to_string(), line, char_pos, line, char_pos);
-
-        changes.push(change_event);
-        DidChangeNotification::new(self.next_versioned_identifer(), changes)
     }
 
-    pub fn delete_right(&mut self) -> DidChangeNotification {
+    pub fn delete_right(&mut self) {
         let caret_absolute_pos = self.get_caret_absolute_pos();
-        let line = self.buffer.char_to_line(caret_absolute_pos);
-        let char_pos = caret_absolute_pos - self.buffer.line_to_char(line);
 
         // If we are currently selecting text, 
         // simply delete the selected text
         if caret_absolute_pos != self.caret_char_anchor {
-            return DidChangeNotification::new(self.next_versioned_identifer(), vec![self.delete_selection()]);
+            self.delete_selection();
+            return;
         }
 
         // In case of a CRLF, delete both characters
@@ -592,42 +529,32 @@ impl TextBuffer {
         }
 
         let next_char_pos = min(caret_absolute_pos + offset, self.buffer.len_chars());
-        let new_line = self.buffer.char_to_line(next_char_pos);
-        let new_char = next_char_pos - self.buffer.line_to_char(new_line);
-
         self.buffer.remove(caret_absolute_pos..next_char_pos);
-        if new_line > line {
-            self.preserve_semantic_line_highlights(line, line - 1);
-        }
-        
-        let change_event = TextDocumentContentChangeEvent::new_delete_event(line, char_pos, new_line, new_char);
-        DidChangeNotification::new(self.next_versioned_identifer(), vec![change_event])
     }
 
-    pub fn delete_right_by_word(&mut self) -> DidChangeNotification {
+    pub fn delete_right_by_word(&mut self) {
         let caret_absolute_pos = self.get_caret_absolute_pos();
 
         // If we are currently selecting text, 
         // simply delete the selected text
         if caret_absolute_pos != self.caret_char_anchor {
-            return DidChangeNotification::new(self.next_versioned_identifer(), vec![self.delete_selection()]);
+            self.delete_selection();
+            return;
         }
 
         let count = self.get_boundary_char_count(CharSearchDirection::Forward);
         self.set_selection(SelectionMode::Right, count, true);
-
-        DidChangeNotification::new(self.next_versioned_identifer(), vec![self.delete_selection()])
+        self.delete_selection();
     }
 
-    pub fn delete_left(&mut self) -> DidChangeNotification {
+    pub fn delete_left(&mut self) {
         let caret_absolute_pos = self.get_caret_absolute_pos();
-        let line = self.buffer.char_to_line(caret_absolute_pos);
-        let char_pos = caret_absolute_pos - self.buffer.line_to_char(line);
 
         // If we are currently selecting text, 
         // simply delete the selected text
         if caret_absolute_pos != self.caret_char_anchor {
-            return DidChangeNotification::new(self.next_versioned_identifer(), vec![self.delete_selection()]);
+            self.delete_selection();
+            return;
         }
 
         // In case of a CRLF, delete both characters
@@ -643,30 +570,23 @@ impl TextBuffer {
         let previous_char_pos = caret_absolute_pos.saturating_sub(offset);
         self.buffer.remove(previous_char_pos..caret_absolute_pos);
         self.set_selection(SelectionMode::Left, offset, false);
-        self.preserve_semantic_line_highlights(line, self.get_current_line());
-
-        let new_line = self.buffer.char_to_line(previous_char_pos);
-        let new_char = previous_char_pos - self.buffer.line_to_char(new_line);
-
-        let change_event = TextDocumentContentChangeEvent::new_delete_event(new_line, new_char, line, char_pos);
-        DidChangeNotification::new(self.next_versioned_identifer(), vec![change_event])
     }
 
-    pub fn delete_left_by_word(&mut self) -> DidChangeNotification {
+    pub fn delete_left_by_word(&mut self) {
         let caret_absolute_pos = self.get_caret_absolute_pos();
 
         // If we are currently selecting text, 
         // simply delete the selected text
         if caret_absolute_pos != self.caret_char_anchor {
-            return DidChangeNotification::new(self.next_versioned_identifer(), vec![self.delete_selection()]);
+            self.delete_selection();
+            return;
         }
 
         // Start by moving left once, then get the boundary count
         self.set_selection(SelectionMode::Left, 1, true);
         let count = self.get_boundary_char_count(CharSearchDirection::Backward);
         self.set_selection(SelectionMode::Left, count, true);
-
-        DidChangeNotification::new(self.next_versioned_identifer(), vec![self.delete_selection()])
+        self.delete_selection();
     }
 
     // Parses and creates ranges of highlight information directly
@@ -679,71 +599,6 @@ impl TextBuffer {
         let caret_it = self.buffer.chars_at(caret_absolute_pos);
 
         highlight_text(text_in_current_view.as_str(), self.absolute_char_pos_start, caret_absolute_pos, self.language_identifier, start_it, caret_it)
-    }
-
-    // Processes the semantic tokens received from the language server
-    pub fn get_semantic_highlights(&mut self) -> Vec<(DWRITE_TEXT_RANGE, SemanticTokenTypes)> {
-        let top_line_absolute_pos = self.buffer.line_to_char(self.top_line);
-        let mut highlights = Vec::new();
-
-        // This is only safe because the semantic token data
-        // always comes in multiples of 5
-        let mut i = 0;
-        let mut line = 0;
-        let mut start = 0;
-
-        while i < self.semantic_tokens.len() {
-            let delta_line = self.semantic_tokens[i];
-            line += delta_line;
-
-            // Early continue if line is above the current view
-            // Early break if line is below the current view
-            if line < self.top_line as u32 {
-                i += 5;
-                continue;
-            }
-            else if line > min(self.buffer.len_lines(), self.bot_line) as u32 {
-                break;
-            }
-
-            let delta_start = self.semantic_tokens[i + 1];
-            if delta_line == 0 {
-                start += delta_start;
-            }
-            else {
-                start = delta_start;
-            }
-            let length = self.semantic_tokens[i + 2];
-
-            match self.language_identifier {
-                CPP_LANGUAGE_IDENTIFIER => {
-                    let token_type = CppSemanticTokenTypes::to_semantic_token_type(&CppSemanticTokenTypes::from_u32(self.semantic_tokens[i + 3]));
-                    let line_absolute_pos = self.buffer.line_to_char(line as usize);
-                    let range = DWRITE_TEXT_RANGE {
-                        startPosition: ((line_absolute_pos + start as usize) - top_line_absolute_pos) as u32,
-                        length
-                    };
-                    highlights.push((range, token_type));
-                }
-                RUST_LANGUAGE_IDENTIFIER => {
-                    let token_type = RustSemanticTokenTypes::to_semantic_token_type(&RustSemanticTokenTypes::from_u32(self.semantic_tokens[i + 3]));
-                    let line_absolute_pos = self.buffer.line_to_char(line as usize);
-                    let range = DWRITE_TEXT_RANGE {
-                        startPosition: ((line_absolute_pos + start as usize) - top_line_absolute_pos) as u32,
-                        length
-                    };
-                    highlights.push((range, token_type));
-
-                    // We don't currently use the modifiers for highlighting
-                    let _  = RustSemanticTokenModifiers::from_u32(self.semantic_tokens[i + 4]);
-                }
-                _ => return Vec::new()
-            }
-
-            i += 5;
-        }
-
-        highlights
     }
 
     pub fn get_view_origin(&self) -> (f32, f32) {
@@ -818,7 +673,7 @@ impl TextBuffer {
         }
     }
 
-    pub fn cut_selection(&mut self, hwnd: HWND) -> DidChangeNotification {
+    pub fn cut_selection(&mut self, hwnd: HWND) {
         // Copy the selection
         self.copy_selection(hwnd);
 
@@ -826,14 +681,14 @@ impl TextBuffer {
         // If we're selecting text, delete it
         // otherwise delete the current line
         if caret_absolute_pos != self.caret_char_anchor {
-            return DidChangeNotification::new(self.next_versioned_identifer(), vec![self.delete_selection()]);
+            self.delete_selection();
+            return;
         }
 
         let current_line_idx = self.buffer.char_to_line(caret_absolute_pos);
         let current_line = self.buffer.line(current_line_idx);
         let current_line_chars = self.buffer.line_to_char(current_line_idx);
         let current_line_length = current_line.len_chars();
-        self.preserve_semantic_line_highlights(current_line_idx, current_line_idx.saturating_sub(1));
 
         // Update caret position
         self.caret_char_pos = current_line_chars;
@@ -841,13 +696,9 @@ impl TextBuffer {
         self.caret_char_anchor = self.caret_char_pos;
 
         self.buffer.remove(current_line_chars..current_line_chars + current_line_length);
-
-        let change_event = TextDocumentContentChangeEvent::new_delete_event(current_line_idx, 0, current_line_idx + 1, 0);
-        DidChangeNotification::new(self.next_versioned_identifer(), vec![change_event])
     }
 
-    pub fn paste(&mut self, hwnd: HWND) -> Option<DidChangeNotification> {
-        let mut did_change_notification: Option<DidChangeNotification> = None;
+    pub fn paste(&mut self, hwnd: HWND) {
         unsafe {
             if OpenClipboard(hwnd) > 0 {
                 let clipboard_data_ptr = GetClipboardData(CF_TEXT);
@@ -860,15 +711,13 @@ impl TextBuffer {
                     // Convert back to &str and trim the trailing null-byte
                     let chars = std::str::from_utf8_unchecked(slice).trim_end_matches('\0');
 
-                    did_change_notification = Some(self.insert_chars(chars));
+                    self.insert_chars(chars);
                     GlobalUnlock(clipboard_data_ptr);
                 }
 
                 CloseClipboard();
             }
         }
-
-        did_change_notification
     }
 
     pub fn get_selection_range(&self) -> Option<DWRITE_TEXT_RANGE> {
@@ -974,69 +823,6 @@ impl TextBuffer {
 
     pub fn get_current_line(&self) -> usize {
         self.buffer.char_to_line(self.get_caret_absolute_pos())
-    }
-
-    fn next_versioned_identifer(&mut self) -> VersionedTextDocumentIdentifier {
-        self.lsp_versioned_identifier.version += 1;
-        self.lsp_versioned_identifier.clone()
-    }
-
-    // Adds potential newlines to the temporary edits to preserve
-    // semantic highlighting until new highlights are resolved
-    // by the language server
-    fn preserve_semantic_line_highlights(&mut self, line_before_edit: usize, line_after_edit: usize) {
-        // We will insert delta number of lines in between the line
-        // before the edit that occured and the new line of the caret
-        let delta: i32 = (line_after_edit as i32) - (line_before_edit as i32);
-
-        if delta != 0 {
-            let mut i = 0;
-            let mut line = 0;
-            while i < self.semantic_tokens.len() {
-                let delta_line = self.semantic_tokens[i];
-                line += delta_line;
-    
-                if line > (line_before_edit as u32) {
-                    if delta > 0 {
-                        self.semantic_tokens[i] += delta.abs() as u32;
-                    }
-                    else {
-                        self.semantic_tokens[i] = self.semantic_tokens[i].saturating_sub(delta.abs() as u32);
-                    }
-                    break;
-                }
-                i += 5;
-            }
-        }
-    }
-
-    // Adds a character to the temporary edits to preserve
-    // semantic highlighting until new highlights are resolved
-    // by the language server
-    fn preserve_semantic_char_highlights(&mut self, line_pos: usize, char_pos_in_line: usize) {
-        let mut i = 0;
-        let mut line = 0;
-        let mut start = 0;
-
-        while i < self.semantic_tokens.len() {
-            let delta_line = self.semantic_tokens[i];
-            line += delta_line;
-
-            let delta_start = self.semantic_tokens[i + 1];
-            if delta_line == 0 {
-                start += delta_start;
-            }
-            else {
-                start = delta_start;
-            }
-            let length = self.semantic_tokens[i + 2];
-
-            if line == (line_pos as u32) && (start + length) == (char_pos_in_line as u32) {
-                self.semantic_tokens[i + 2] += 1;
-            }
-
-            i += 5;
-        }
     }
 
     fn linebreaks_before_line(&self, line: usize) -> usize {

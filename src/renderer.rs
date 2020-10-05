@@ -4,7 +4,7 @@ use crate::{
     theme::Theme,
     status_bar::StatusBar,
     file_tree::FileTree,
-    lsp_structs::SemanticTokenTypes
+    language_support::SemanticTokenTypes
 };
 
 use std::{
@@ -420,24 +420,15 @@ impl TextRenderer {
                 (*self.target).PushLayer(&text_layer_params, null_mut());
 
                 let lexical_highlights = buffer.get_lexical_highlights();
-                let semantic_highlights = buffer.get_semantic_highlights();
                 // In case of overlap, lexical highlights trump semantic for now.
                 // This is to ensure that commenting out big sections of code happen
                 // instantaneously
-                for (range, token_type) in semantic_highlights.into_iter().chain(lexical_highlights.highlight_tokens) {
+                for (range, token_type) in lexical_highlights.highlight_tokens {
                     match token_type {
-                        SemanticTokenTypes::None | SemanticTokenTypes::Variable          
-                                                            => {},
-                        SemanticTokenTypes::Function          => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.function_brush as *mut IUnknown, range)); },
-                        SemanticTokenTypes::Method            => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.method_brush as *mut IUnknown, range)); },
-                        SemanticTokenTypes::Class             => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.class_brush as *mut IUnknown, range)); },
-                        SemanticTokenTypes::Enum              => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.enum_brush as *mut IUnknown, range)); },
                         SemanticTokenTypes::Comment           => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.comment_brush as *mut IUnknown, range)); },
                         SemanticTokenTypes::Keyword           => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.keyword_brush as *mut IUnknown, range)); },
                         SemanticTokenTypes::Literal           => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.literal_brush as *mut IUnknown, range)); },
-                        SemanticTokenTypes::Macro | SemanticTokenTypes::Preprocessor             
-                                                            => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.macro_preprocessor_brush as *mut IUnknown, range)); },
-                        SemanticTokenTypes::Primitive         => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.primitive_brush as *mut IUnknown, range)); }
+                        SemanticTokenTypes::Preprocessor      => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.macro_preprocessor_brush as *mut IUnknown, range)); },
                     }
                 }
 
@@ -470,7 +461,6 @@ impl TextRenderer {
             }
 
             self.draw_renderable_region(status_bar, self.theme.status_bar_brush as *mut ID2D1Brush, self.theme.text_brush as *mut ID2D1Brush);
-
             self.draw_renderable_region(file_tree, self.theme.status_bar_brush as *mut ID2D1Brush, self.theme.text_brush as *mut ID2D1Brush);
 
             if let Some(hover_rect) = file_tree.hovered_line_rect {

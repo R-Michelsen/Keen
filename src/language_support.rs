@@ -1,10 +1,5 @@
-use crate::{
-    lsp_structs::SemanticTokenTypes,
-    text_utils
-};
-
+use crate::text_utils;
 use std::collections::HashMap;
-
 use winapi::um::dwrite::DWRITE_TEXT_RANGE;
 use ropey::iter::Chars;
 
@@ -23,7 +18,6 @@ pub const CPP_KEYWORDS: [&str; 92] = ["alignas", "alignof", "and", "and_eq", "as
 "union", "unsigned", "using", "virtual", "void", "volatile", "wchar_t", "while", 
 "xor", "xor_eq"];
 pub const CPP_FILE_EXTENSIONS: [&str; 5] = ["c", "h", "cpp", "hpp", "cxx"];
-pub const CPP_LSP_SERVER: &str = "clangd";
 pub const CPP_LANGUAGE_IDENTIFIER: &str = "cpp";
 
 pub const RUST_KEYWORDS: [&str; 38] = ["as", "break", "const", "continue", "crate", 
@@ -32,8 +26,15 @@ pub const RUST_KEYWORDS: [&str; 38] = ["as", "break", "const", "continue", "crat
 "struct", "super", "trait", "true", "type", "unsafe", "use", "where", "while", 
 "async", "await", "dyn"];
 pub const RUST_FILE_EXTENSIONS: [&str; 1] = ["rs"];
-pub const RUST_LSP_SERVER: &str = "rust-analyzer";
 pub const RUST_LANGUAGE_IDENTIFIER: &str = "rust";
+
+#[derive(Debug, PartialEq)]
+pub enum SemanticTokenTypes {
+    Comment,
+    Keyword,
+    Literal,
+    Preprocessor,
+}
 
 fn new_range(start: usize, length: usize) -> DWRITE_TEXT_RANGE {
     DWRITE_TEXT_RANGE {

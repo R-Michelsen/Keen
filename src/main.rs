@@ -1,14 +1,13 @@
 #![feature(new_uninit)]
 #![feature(const_fn)]
 #![feature(clamp)]
+#![feature(const_fn_floating_point_arithmetic)]
 #![windows_subsystem = "console"]
 
 mod editor;
 mod renderer;
 mod theme;
 mod buffer;
-mod lsp_client;
-mod lsp_structs;
 mod settings;
 mod language_support;
 mod text_utils;
@@ -16,21 +15,13 @@ mod status_bar;
 mod file_tree;
 
 use editor::{ Editor, RegionType, EditorCommand };
-use settings::MAX_LSP_RESPONSE_SIZE;
 
 use std::{
-    alloc::{dealloc, Layout},
     ffi::OsStr,
     mem::MaybeUninit,
     os::windows::ffi::OsStrExt,
     iter::once,
-    ptr::null_mut,
-    time::Duration,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering}
-    },
-    thread
+    ptr::null_mut
 };
 
 use winapi::{
@@ -42,7 +33,7 @@ use winapi::{
         winuser::{
             SetWindowLongPtrW, GetWindowLongPtrW,
             UnregisterClassW, DispatchMessageW,
-            TranslateMessage, GetMessageW, SendMessageW, 
+            TranslateMessage, GetMessageW,
             ShowWindow, CreateWindowExW, SetCursor,
             SetProcessDpiAwarenessContext, PostQuitMessage,
             DefWindowProcW, RegisterClassW, LoadCursorW, 
@@ -79,8 +70,6 @@ use winapi::{
 
 const WM_CARET_VISIBLE:     u32 = 0xC000;
 const WM_CARET_INVISIBLE:   u32 = 0xC001;
-const WM_LSP_RESPONSE:      u32 = 0xC002;
-const WM_LSP_CRASH:         u32 = 0xC003; 
 const WM_REGION_CHANGED:    u32 = 0xC004;
 
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -116,25 +105,6 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 RegionType::Unknown => {}
             }
             InvalidateRect(hwnd, null_mut(), false as i32);
-            0
-        }
-        WM_LSP_RESPONSE => {
-            let data = wparam as *mut u8;
-            let range = std::mem::transmute::<isize, (i32, i32)>(lparam); 
-            let slice: &[u8] = core::slice::from_raw_parts_mut(data.offset(range.0 as isize), range.1 as usize);
-            let response = std::str::from_utf8(slice).unwrap();
-            (*editor).process_language_server_response(response);
-            
-            // We have to deallocte the buffer holding the response here,
-            // it is NOT done by the LSP thread itself
-            dealloc(data, Layout::from_size_align(MAX_LSP_RESPONSE_SIZE, 8).unwrap());
-            InvalidateRect(hwnd, null_mut(), false as i32);
-            0
-        }
-        WM_LSP_CRASH => {
-            let len = lparam as usize;
-            let client = std::str::from_utf8(std::slice::from_raw_parts(wparam as *const u8, len)).unwrap();
-            (*editor).execute_command(&EditorCommand::LSPClientCrash(client));
             0
         }
         WM_CARET_VISIBLE => {
@@ -176,6 +146,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             if wparam >= 0x20 && wparam <= 0x7E {
                 (*editor).execute_command(&EditorCommand::CharInsert(wparam as u16));
             }
+            InvalidateRect(hwnd, null_mut(), false as i32);
             0
         }
         WM_MOUSEWHEEL => {
@@ -230,6 +201,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 
             let mouse_pos = (GET_X_LPARAM(lparam) as f32, GET_Y_LPARAM(lparam) as f32);
             (*editor).execute_command(&EditorCommand::MouseMove(mouse_pos));
+            // TODO (PERFORMANCE): Only invalidate in case the selection changes!
             if (*editor).selection_active() {
                 InvalidateRect(hwnd, null_mut(), false as i32);
             }
@@ -300,35 +272,9 @@ fn main() {
 
         let mut msg = MaybeUninit::<MSG>::uninit();
 
-        let force_finish = Arc::new(AtomicBool::new(false));
-        let force_finish_clone = force_finish.clone();
-        let hwnd_clone = hwnd as u64;
-        let caret_blink_thread = thread::spawn(move|| {
-            let mut message_idx: u32 = 0;
-            
-            // To be able to responsively exit the thread on
-            // program close we will poll the thread every 50ms
-            let mut counter = 1;
-            while !force_finish_clone.load(Ordering::Relaxed) {
-                if counter > 10 {
-                    SendMessageW(hwnd_clone as HWND, WM_CARET_VISIBLE + message_idx, 0, 0);
-                    message_idx ^= 1;
-                    counter = 1;
-                }
-
-                thread::sleep(Duration::from_millis(50));
-                counter += 1;
-            }
-        });
-
         while GetMessageW(msg.as_mut_ptr(), 0 as HWND, 0, 0) > 0 {
             TranslateMessage(msg.as_mut_ptr());
             DispatchMessageW(msg.as_mut_ptr());
-        }
-
-        force_finish.store(true, Ordering::Relaxed);
-        if let Err(panic) = caret_blink_thread.join() {
-            println!("Caret blink thread failed with error: {:?}", panic);
         }
 
         CoUninitialize();

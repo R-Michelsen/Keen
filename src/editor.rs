@@ -25,11 +25,7 @@ use crate::{
     settings::{SCROLL_LINES_PER_MOUSEMOVE, SCROLL_LINES_PER_ROLL, 
      NUMBER_OF_SPACES_PER_TAB, SCROLL_ZOOM_DELTA, RESIZABLE_BORDER_WIDTH},
     renderer::{TextRenderer, RenderableTextRegion},
-    lsp_client::{LSPClient, LSPRequestType},
-    lsp_structs::{GenericNotification, GenericRequest, GenericResponse,
-     DidChangeNotification, ResponseError, SemanticTokenResult, ErrorCodes},
-    language_support::{CPP_FILE_EXTENSIONS, CPP_LSP_SERVER, CPP_LANGUAGE_IDENTIFIER, 
-     RUST_LSP_SERVER, RUST_FILE_EXTENSIONS, RUST_LANGUAGE_IDENTIFIER},
+    language_support::{CPP_FILE_EXTENSIONS, CPP_LANGUAGE_IDENTIFIER, RUST_FILE_EXTENSIONS, RUST_LANGUAGE_IDENTIFIER},
     buffer::{TextBuffer, SelectionMode, MouseSelectionMode},
     status_bar::StatusBar,
     file_tree::FileTree,
@@ -51,8 +47,7 @@ pub enum EditorCommand {
     LeftRelease,
     MouseMove(MousePos),
     KeyPressed(i32, ShiftDown, CtrlDown),
-    CharInsert(u16),
-    LSPClientCrash(&'static str)
+    CharInsert(u16)
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -137,8 +132,6 @@ pub struct Editor {
     renderer: Rc<RefCell<TextRenderer>>,
     layout: EditorLayout,
 
-    lsp_client: Option<LSPClient>,
-
     status_bar: StatusBar,
     file_tree: FileTree,
 
@@ -153,7 +146,9 @@ pub struct Editor {
     mouse_pos: (f32, f32),
     mouse_pos_captured: bool,
     force_visible_caret_timer: u32,
-    caret_is_visible: bool
+    caret_is_visible: bool,
+
+    pub timer: std::time::Instant
 }
 
 impl Editor {
@@ -171,8 +166,6 @@ impl Editor {
             renderer: renderer.clone(),
             layout,
 
-            lsp_client: None,
-
             status_bar: StatusBar::new(layout.status_bar_origin, layout.status_bar_extents, renderer.clone()),
             file_tree: FileTree::new("", layout.file_tree_origin, layout.file_tree_extents, renderer.clone()),
 
@@ -187,7 +180,9 @@ impl Editor {
             mouse_pos: (0.0, 0.0),
             mouse_pos_captured: false,
             force_visible_caret_timer: 0,
-            caret_is_visible: true
+            caret_is_visible: true,
+
+            timer: std::time::Instant::now()
         }
     }
 
@@ -218,28 +213,6 @@ impl Editor {
             )
         );
         self.current_buffer = file_prefix.clone() + path;
-
-        // If the LSP Client is not yet running, create an instance
-        // we then return since we will handle the open file request
-        // once the LSP Client is actually initialized.
-        match &self.lsp_client {
-            None if CPP_FILE_EXTENSIONS.contains(&extension) => {
-                self.lsp_client = Some(LSPClient::new(self.hwnd, CPP_LSP_SERVER));
-                self.lsp_client.as_mut().unwrap().send_initialize_request(path.to_owned());
-                return;
-            }
-            None if RUST_FILE_EXTENSIONS.contains(&extension) => {
-                self.lsp_client = Some(LSPClient::new(self.hwnd, RUST_LSP_SERVER));
-                self.lsp_client.as_mut().unwrap().send_initialize_request(path.to_owned());
-                return;
-            }
-            _ => {}
-        }
-
-        let lsp_client = self.lsp_client.as_mut().unwrap();
-        let text = std::fs::read_to_string(os_path).unwrap();
-        lsp_client.send_did_open_notification(file_prefix.clone() + path, language_identifier.to_owned(), text);
-        lsp_client.send_semantic_token_request(file_prefix + path);
     }
 
     pub fn draw(&mut self) {
@@ -343,109 +316,6 @@ impl Editor {
         }
     }
 
-    fn handle_response_error(&mut self, request_type: LSPRequestType, response_error: &ResponseError) {
-        match request_type {
-            LSPRequestType::InitializationRequest(_) => {}
-            LSPRequestType::SemanticTokensRequest(uri) => {
-                // If the semantic token request fails
-                // due to content changed, send a new one
-                if ErrorCodes::from_i64((*response_error).code) == ErrorCodes::ContentModified {
-                    if let Some(lsp_client) = self.lsp_client.as_mut() {
-                        lsp_client.send_semantic_token_request(uri);
-                    }
-                }
-            }
-        }
-    }
-
-    fn handle_response_success(&mut self, request_type: LSPRequestType, result_value: serde_json::Value) {
-        if let Some(lsp_client) = self.lsp_client.as_mut() {
-            match request_type {
-                LSPRequestType::InitializationRequest(path) => {
-                    // Send init notification
-                    lsp_client.send_initialized_notification();
-    
-                    // Then open the file that triggered the LSP creation
-                    let file_prefix = "file:///".to_owned();
-                    let os_path = Path::new(path.as_str());
-                    let extension = os_path.extension().unwrap().to_str().unwrap();
-            
-                    let language_identifier = 
-                    if CPP_FILE_EXTENSIONS.contains(&extension) {
-                        CPP_LANGUAGE_IDENTIFIER
-                    }
-                    else if RUST_FILE_EXTENSIONS.contains(&extension) {
-                        RUST_LANGUAGE_IDENTIFIER
-                    }
-                    else {
-                        ""
-                    };
-                    let text = std::fs::read_to_string(os_path).unwrap();
-                    lsp_client.send_did_open_notification(file_prefix.clone() + path.as_str(), language_identifier.to_owned(), text);
-                    lsp_client.send_semantic_token_request(file_prefix + path.as_str());
-                },
-                LSPRequestType::SemanticTokensRequest(uri) => {
-                    // Get the buffer for which the semantic token request was issued
-                    let buffer = self.buffers.get_mut(&uri).unwrap();
-    
-                    // Update the semantic tokens of the buffer if they are updated
-                    if let Ok(result) = serde_json::from_value::<SemanticTokenResult>(result_value) {
-                        buffer.update_semantic_tokens(result.data);
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn process_language_server_response(&mut self, message: &str) {
-        if let Ok(response) = serde_json::from_str::<GenericResponse>(message) {
-            let response_id = match response.id {
-                serde_json::Value::Number(x) => x.as_i64().unwrap(),
-                serde_json::Value::String(x) => x.parse::<i64>().unwrap(),
-                _ => {
-                    println!("Unrecognized response ID from language server");
-                    -1
-                }
-            };
-
-            if let Some(lsp_client) = self.lsp_client.as_mut() {
-                let request_type = lsp_client.request_types[response_id as usize].clone();
-
-                // Handle any errors
-                if let Some(response_error) = response.error {
-                    self.handle_response_error(request_type, &response_error)
-                }
-                // Spec says result is guaranteed to be Some(), when there is no error
-                // rust-analyzer doesn't seem to honor this so we have to check it
-                else if let Some(response_result) = response.result {
-                    self.handle_response_success(request_type, response_result);
-                }
-            }
-        }
-        else if let Ok(_) = serde_json::from_str::<GenericNotification>(message) {
-            // Atm we don't handle requests
-        }
-        else if let Ok(_) = serde_json::from_str::<GenericRequest>(message) {
-            // Atm we don't handle requests
-        }
-    }
-
-    fn process_document_change(did_change_notification: &DidChangeNotification, buffer: &mut TextBuffer, lsp_client: &mut LSPClient) {
-        // rust-analyzer only supports full change notifications
-        match buffer.language_identifier {
-            CPP_LANGUAGE_IDENTIFIER => {
-                lsp_client.send_did_change_notification(did_change_notification);
-                lsp_client.send_semantic_token_request(buffer.get_uri());
-            }
-            RUST_LANGUAGE_IDENTIFIER => {
-                let full_did_change_notification = buffer.get_full_did_change_notification();
-                lsp_client.send_did_change_notification(&full_did_change_notification);
-                lsp_client.send_semantic_token_request(buffer.get_uri());
-            }
-            _ => {}
-        }
-    }
-
     fn force_caret_visible(caret_is_visible: &mut bool, caret_timer: &mut u32) {
         if *caret_is_visible {
             *caret_timer = 1;
@@ -538,40 +408,22 @@ impl Editor {
                         (VK_DOWN, _)       => buffer.set_selection(SelectionMode::Down, 1, shift_down),
                         (VK_UP, _)         => buffer.set_selection(SelectionMode::Up, 1, shift_down),
                         (VK_TAB, _)        => {
-                            let did_change_notification = buffer.insert_chars(" ".repeat(NUMBER_OF_SPACES_PER_TAB).as_str());
-                            if let Some(lsp_client) = self.lsp_client.as_mut() {
-                                Self::process_document_change(&did_change_notification, buffer, lsp_client);
-                            }
+                            buffer.insert_chars(" ".repeat(NUMBER_OF_SPACES_PER_TAB).as_str());
                         },
                         (VK_RETURN, false) => {
-                            let did_change_notification = buffer.insert_newline();
-                            if let Some(lsp_client) = self.lsp_client.as_mut() {
-                                Self::process_document_change(&did_change_notification, buffer, lsp_client);
-                            }
+                            buffer.insert_newline();
                         },
                         (VK_DELETE, false) => {
-                            let did_change_notification = buffer.delete_right();
-                            if let Some(lsp_client) = self.lsp_client.as_mut() {
-                                Self::process_document_change(&did_change_notification, buffer, lsp_client);
-                            }
+                            buffer.delete_right();
                         },
                         (VK_DELETE, true) => {
-                            let did_change_notification = buffer.delete_right_by_word();
-                            if let Some(lsp_client) = self.lsp_client.as_mut() {
-                                Self::process_document_change(&did_change_notification, buffer, lsp_client);
-                            }
+                            buffer.delete_right_by_word();
                         },
                         (VK_BACK, false) => {
-                            let did_change_notification = buffer.delete_left();
-                            if let Some(lsp_client) = self.lsp_client.as_mut() {
-                                Self::process_document_change(&did_change_notification, buffer, lsp_client);
-                            }
+                            buffer.delete_left();
                         },
                         (VK_BACK, true) => {
-                            let did_change_notification = buffer.delete_left_by_word();
-                            if let Some(lsp_client) = self.lsp_client.as_mut() {
-                                Self::process_document_change(&did_change_notification, buffer, lsp_client);
-                            }
+                            buffer.delete_left_by_word();
                         },
                         // CTRL+A (Select all)
                         (0x41, true) => {
@@ -583,34 +435,19 @@ impl Editor {
                         },
                         // CTRL+X (Cut)
                         (0x58, true) => {
-                            let did_change_notification = buffer.cut_selection(self.hwnd);
-                            if let Some(lsp_client) = self.lsp_client.as_mut() {
-                                Self::process_document_change(&did_change_notification, buffer, lsp_client);
-                            }
+                            buffer.cut_selection(self.hwnd);
                         },
                         // CTRL+V (Paste)
                         (0x56, true) => {
-                            let did_change_notification = buffer.paste(self.hwnd);
-                            if let Some(lsp_client) = self.lsp_client.as_mut() {
-                                match did_change_notification {
-                                    None => {},
-                                    Some(notification) => Self::process_document_change(&notification, buffer, lsp_client)
-                                }
-                            }
+                            buffer.paste(self.hwnd);
                         }
                         _ => {}
                     }
                     Self::force_caret_visible(&mut self.caret_is_visible, &mut self.force_visible_caret_timer);
                 }
                 EditorCommand::CharInsert(character) => {
-                    let did_change_notification = buffer.insert_char(character);
-                    if let Some(lsp_client) = self.lsp_client.as_mut() {
-                        Self::process_document_change(&did_change_notification, buffer, lsp_client);
-                    }
+                    buffer.insert_char(character);
                     Self::force_caret_visible(&mut self.caret_is_visible, &mut self.force_visible_caret_timer);
-                }
-                EditorCommand::LSPClientCrash(client) => {
-                    println!("The {} language server has crashed!", client);
                 }
             }
 
@@ -633,8 +470,8 @@ impl Editor {
         }
     }
 
-    fn execute_status_bar_command(&mut self, cmd: &EditorCommand) {
-
+    fn execute_status_bar_command(&mut self, _cmd: &EditorCommand) {
+        unimplemented!();
     }
 
     fn execute_file_tree_command(&mut self, cmd: &EditorCommand) {
