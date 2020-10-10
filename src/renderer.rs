@@ -2,12 +2,11 @@ use crate::{
     settings,
     buffer::TextBuffer,
     theme::Theme,
-    status_bar::StatusBar,
-    file_tree::FileTree,
     language_support::SemanticTokenTypes
 };
 
 use std::{
+    collections::HashMap,
     ptr::null_mut,
     mem::MaybeUninit,
     ffi::OsStr,
@@ -29,20 +28,17 @@ use winapi::{
         },
         d2d1::{
             ID2D1Factory, ID2D1HwndRenderTarget, D2D1CreateFactory,
-            ID2D1Brush, D2D1_LAYER_PARAMETERS,
-            D2D1_LAYER_OPTIONS_INITIALIZE_FOR_CLEARTYPE,
+            ID2D1Brush, 
             D2D1_PRESENT_OPTIONS_NONE, D2D1_ROUNDED_RECT,
             D2D1_POINT_2F, D2D1_MATRIX_3X2_F, D2D1_SIZE_U, D2D1_RECT_F,
             D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FEATURE_LEVEL_DEFAULT,
-            D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
-            D2D1_DRAW_TEXT_OPTIONS_CLIP,
             D2D1_HWND_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_USAGE_NONE,
             D2D1_RENDER_TARGET_TYPE_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES,
             D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_ANTIALIAS_MODE_ALIASED,
             D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
         },
         unknwnbase::IUnknown,
-        winuser::{GetClientRect, GetDpiForWindow}
+        winuser::{SystemParametersInfoW, SPI_GETCARETWIDTH, GetClientRect, GetDpiForWindow}
     },
     shared::{
         dxgiformat::DXGI_FORMAT_UNKNOWN,
@@ -68,11 +64,10 @@ macro_rules! hr_ok {
 
 const IDENTITY_MATRIX: D2D1_MATRIX_3X2_F = D2D1_MATRIX_3X2_F { matrix: [[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]] };
 
-pub trait RenderableTextRegion {
-    fn get_rect(&self) -> D2D1_RECT_F;
-    fn get_origin(&self) -> (f32, f32);
-    fn get_layout(&mut self) -> *mut IDWriteTextLayout;
-    fn resize(&mut self, origin: (f32, f32), extents: (f32, f32));
+pub struct TextLayout {
+    origin: (f32, f32),
+    extents: (f32, f32),
+    layout: *mut IDWriteTextLayout
 }
 
 pub struct TextRenderer {
@@ -84,13 +79,18 @@ pub struct TextRenderer {
     font_name: Vec<u16>,
     font_locale: Vec<u16>,
 
+    caret_width: usize,
+
     theme: Theme,
 
-    pub write_factory: *mut IDWriteFactory,
-    pub text_format: *mut IDWriteTextFormat,
+    write_factory: *mut IDWriteFactory,
+    text_format: *mut IDWriteTextFormat,
     
     factory: *mut ID2D1Factory,
-    target: *mut ID2D1HwndRenderTarget
+    target: *mut ID2D1HwndRenderTarget,
+
+    buffer_layouts: HashMap<String, TextLayout>,
+    buffer_line_number_layouts: HashMap<String, TextLayout>
 }
 
 impl TextRenderer {
@@ -107,16 +107,25 @@ impl TextRenderer {
             font_name: Vec::new(),
             font_locale: Vec::new(),
 
+            caret_width: 0,
+
             theme: Theme::default(),
                 
             write_factory: null_mut(),
             text_format: null_mut(),
 
             factory: null_mut(),
-            target: null_mut()
+            target: null_mut(),
+
+            buffer_layouts: HashMap::new(),
+            buffer_line_number_layouts: HashMap::new()
         };
 
         unsafe {
+            // We'll increase the width from the system width slightly
+            SystemParametersInfoW(SPI_GETCARETWIDTH, 0, (&mut renderer.caret_width as *mut _) as *mut c_void, 0);
+            renderer.caret_width *= 2;
+
             hr_ok!(
                 D2D1CreateFactory(
                     D2D1_FACTORY_TYPE_SINGLE_THREADED, 
@@ -178,23 +187,6 @@ impl TextRenderer {
         renderer
     }
 
-    pub fn layer_params(origin: (f32, f32), size: (f32, f32)) -> D2D1_LAYER_PARAMETERS {
-        D2D1_LAYER_PARAMETERS {
-            contentBounds: D2D1_RECT_F {
-                left: origin.0,
-                right: origin.0 + size.0,
-                top: origin.1,
-                bottom: origin.1 + size.1
-            },
-            geometricMask: null_mut(),
-            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-            maskTransform: IDENTITY_MATRIX,
-            opacity: 1.0,
-            opacityBrush: null_mut(),
-            layerOptions: D2D1_LAYER_OPTIONS_INITIALIZE_FOR_CLEARTYPE
-        }
-    }
-
     pub fn update_text_format(&mut self, font_size_delta: f32) {
         if (self.font_size + font_size_delta) > 0.0 {
             self.font_size += font_size_delta;
@@ -253,6 +245,102 @@ impl TextRenderer {
             self.font_height = metrics.height;
 
             hr_ok!((*self.text_format).SetIncrementalTabStop(self.font_width * settings::NUMBER_OF_SPACES_PER_TAB as f32));
+        }
+    }
+
+    pub fn get_max_rows(&self) -> usize {
+        (self.pixel_size.height as f32 / self.font_height).ceil() as usize
+    }
+
+    pub fn get_max_columns(&self) -> usize {
+        (self.pixel_size.width as f32 / self.font_width) as usize
+    }
+
+    pub fn get_extents(&self) -> (f32, f32) {
+        (self.pixel_size.width as f32, self.pixel_size.height as f32)
+    }
+
+    fn get_text_buffer_margin(&self, text_buffer: &mut TextBuffer) -> f32 {
+        text_buffer.margin_column_count as f32 * self.font_width
+    }
+
+    fn get_text_buffer_column_offset(&self, text_buffer: &mut TextBuffer) -> f32 {
+        text_buffer.column_offset as f32 * self.font_width
+    }
+
+    fn get_text_buffer_adjusted_origin(&self, text_buffer: &mut TextBuffer) -> (f32, f32) {
+        let margin = self.get_text_buffer_margin(text_buffer);
+        let column_offset = self.get_text_buffer_column_offset(text_buffer);
+        let text_layout = self.buffer_layouts.get(&text_buffer.path).unwrap();
+        (text_layout.origin.0 + margin - column_offset, text_layout.origin.1)
+    }
+
+    pub fn update_buffer_layout(&mut self, origin: (f32, f32), extents: (f32, f32), text_buffer: &mut TextBuffer) {
+        if self.buffer_layouts.contains_key(&text_buffer.path) {
+            unsafe {
+                (**(self.buffer_layouts.get_mut(&text_buffer.path).unwrap().layout)).Release();
+            }
+        }
+
+        let lines = text_buffer.get_text_view_as_utf16();
+        let margin = self.get_text_buffer_margin(text_buffer);
+
+        unsafe {
+            let mut text_layout: *mut IDWriteTextLayout = null_mut();
+            hr_ok!((*self.write_factory).CreateTextLayout(
+                lines.as_ptr(),
+                lines.len() as u32,
+                self.text_format,
+                self.pixel_size.width as f32 - margin,
+                self.pixel_size.height as f32,
+                &mut text_layout
+            ));
+            self.buffer_layouts.insert(text_buffer.path.to_string(), TextLayout { origin, extents, layout: text_layout });
+        }
+    }
+
+    pub fn update_buffer_line_number_layout(&mut self, origin: (f32, f32), extents: (f32, f32), text_buffer: &mut TextBuffer) {
+        if self.buffer_line_number_layouts.contains_key(&text_buffer.path) {
+            unsafe {
+                (**(self.buffer_line_number_layouts.get_mut(&text_buffer.path).unwrap().layout)).Release();
+            }
+        }
+
+        let line_number_string = text_buffer.get_line_number_string();
+        unsafe {
+            let mut text_layout: *mut IDWriteTextLayout = null_mut();
+            hr_ok!((*self.write_factory).CreateTextLayout(
+                line_number_string.as_ptr(),
+                line_number_string.len() as u32,
+                self.text_format,
+                self.get_text_buffer_margin(text_buffer),
+                self.pixel_size.height as f32,
+                &mut text_layout
+            ));
+            self.buffer_line_number_layouts.insert(text_buffer.path.to_string(), TextLayout { origin, extents, layout: text_layout });
+        }
+    }
+
+    pub fn mouse_pos_to_text_pos(&self, text_buffer: &mut TextBuffer, mouse_pos: (f32, f32)) -> usize {
+        let text_layout = self.buffer_layouts.get(&text_buffer.path).unwrap();
+
+        let adjusted_origin = self.get_text_buffer_adjusted_origin(text_buffer);
+        
+        let mut is_inside = 0;
+        let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
+        unsafe {
+            hr_ok!(
+                (*text_layout.layout).HitTestPoint(
+                    mouse_pos.0 - adjusted_origin.0,
+                    mouse_pos.1 - adjusted_origin.1,
+                    &mut text_buffer.caret_trailing,
+                    &mut is_inside,
+                    metrics_uninit.as_mut_ptr()
+                )
+            );
+
+            let metrics = metrics_uninit.assume_init();
+            metrics.textPosition as usize
         }
     }
 
@@ -373,103 +461,112 @@ impl TextRenderer {
         }
     }
 
-    fn draw_renderable_region<T>(&self, region: &mut T, background_brush: *mut ID2D1Brush, text_brush: *mut ID2D1Brush) where T: RenderableTextRegion {
-        unsafe {
-            let rect = region.get_rect();
-            (*self.target).FillRectangle(&rect, background_brush as *mut ID2D1Brush);
+    fn draw_line_numbers(&self, text_buffer: &mut TextBuffer) {
+        let text_layout = self.buffer_line_number_layouts.get(&text_buffer.path).unwrap();
 
-            let (origin_x, origin_y) = region.get_origin();
-            let layout = region.get_layout();
+        unsafe {
             (*self.target).DrawTextLayout(
                 D2D1_POINT_2F {
-                    x: origin_x,
-                    y: origin_y
+                    x: text_layout.origin.0,
+                    y: text_layout.origin.1
                 },
-                layout,
-                text_brush as *mut ID2D1Brush,
-                D2D1_DRAW_TEXT_OPTIONS_CLIP | D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT
+                text_layout.layout,
+                self.theme.line_number_brush as *mut ID2D1Brush,
+                D2D1_DRAW_TEXT_OPTIONS_NONE
             );
         }
     }
 
-    pub fn draw(&self, text_buffer: Option<&mut TextBuffer>, status_bar: &mut StatusBar, file_tree: &mut FileTree, draw_caret: bool) {
+    fn draw_text(&self, origin: (f32, f32), text_buffer: &mut TextBuffer, text_layout: *mut IDWriteTextLayout) {
+        unsafe {
+            let lexical_highlights = text_buffer.get_lexical_highlights();
+            // In case of overlap, lexical highlights trump semantic for now.
+            // This is to ensure that commenting out big sections of code happen
+            // instantaneously
+            for (range, token_type) in lexical_highlights.highlight_tokens {
+                match token_type {
+                    SemanticTokenTypes::Comment           => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.comment_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::Keyword           => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.keyword_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::Literal           => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.literal_brush as *mut IUnknown, range)); },
+                    SemanticTokenTypes::Preprocessor      => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.macro_preprocessor_brush as *mut IUnknown, range)); },
+                }
+            }
 
+            if let Some(selection_range) = text_buffer.get_selection_range() {
+                self.draw_selection_range(origin, text_layout, DWRITE_TEXT_RANGE { startPosition: selection_range.start, length: selection_range.length });
+            }
+            if let Some(enclosing_bracket_ranges) = lexical_highlights.enclosing_brackets {
+                self.draw_enclosing_brackets(origin, text_layout, enclosing_bracket_ranges);
+            }
+
+            (*self.target).DrawTextLayout(
+                D2D1_POINT_2F { x: origin.0, y: origin.1 },
+                text_layout,
+                self.theme.text_brush as *mut ID2D1Brush,
+                D2D1_DRAW_TEXT_OPTIONS_NONE
+            );
+        }
+    }
+
+    fn draw_caret(&self, origin: (f32, f32), text_buffer: &mut TextBuffer, text_layout: *mut IDWriteTextLayout) {
+        if let Some(caret_offset) = text_buffer.get_caret_offset() {
+
+            let mut caret_pos: (f32, f32) = (0.0, 0.0);
+            let mut metrics_uninit = MaybeUninit::<DWRITE_HIT_TEST_METRICS>::uninit();
+
+            unsafe {
+                hr_ok!((*text_layout).HitTestTextPosition(
+                    caret_offset as u32,
+                    text_buffer.caret_trailing,
+                    &mut caret_pos.0,
+                    &mut caret_pos.1,
+                    metrics_uninit.as_mut_ptr()
+                ));
+
+                let metrics = metrics_uninit.assume_init();
+
+                let rect = D2D1_RECT_F {
+                    left: origin.0 + caret_pos.0 - (self.caret_width as f32 / 2.0),
+                    top: origin.1 + caret_pos.1,
+                    right: origin.0 + caret_pos.0 + (self.caret_width as f32 / 2.0),
+                    bottom: origin.1 + caret_pos.1 + metrics.height
+                };
+
+                (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
+                (*self.target).FillRectangle(&rect, self.theme.caret_brush as *mut ID2D1Brush);
+                (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+            }
+
+        }
+    }
+
+    pub fn draw(&self, text_buffer: &mut TextBuffer) {
         unsafe {
             (*self.target).BeginDraw();
 
             (*self.target).SetTransform(&IDENTITY_MATRIX);
             (*self.target).Clear(&self.theme.background_color);
 
-            if let Some(buffer) = text_buffer {
-                // Push the line numbers layer params before drawing
-                let (line_numbers_layout, line_numbers_layer_params) = buffer.get_line_numbers_layout();
-                (*self.target).PushLayer(&line_numbers_layer_params, null_mut());
-                (*self.target).DrawTextLayout(
-                    D2D1_POINT_2F { 
-                        x: buffer.line_numbers_origin.0,
-                        y: buffer.line_numbers_origin.1
-                    },
-                    line_numbers_layout,
-                    self.theme.line_number_brush as *mut ID2D1Brush,
-                    D2D1_DRAW_TEXT_OPTIONS_NONE
-                );
-                (*self.target).PopLayer();
+            self.draw_line_numbers(text_buffer);
 
-                // Push the text layer params before drawing
-                let (text_layout, text_layer_params) = buffer.get_text_layout();
-                (*self.target).PushLayer(&text_layer_params, null_mut());
+            let text_layout = self.buffer_layouts.get(&text_buffer.path).unwrap();
+            let margin = self.get_text_buffer_margin(text_buffer);
+            let column_offset = self.get_text_buffer_column_offset(text_buffer);
 
-                let lexical_highlights = buffer.get_lexical_highlights();
-                // In case of overlap, lexical highlights trump semantic for now.
-                // This is to ensure that commenting out big sections of code happen
-                // instantaneously
-                for (range, token_type) in lexical_highlights.highlight_tokens {
-                    match token_type {
-                        SemanticTokenTypes::Comment           => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.comment_brush as *mut IUnknown, range)); },
-                        SemanticTokenTypes::Keyword           => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.keyword_brush as *mut IUnknown, range)); },
-                        SemanticTokenTypes::Literal           => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.literal_brush as *mut IUnknown, range)); },
-                        SemanticTokenTypes::Preprocessor      => { hr_ok!((*text_layout).SetDrawingEffect(self.theme.macro_preprocessor_brush as *mut IUnknown, range)); },
-                    }
-                }
+            let clip_rect = D2D1_RECT_F {
+                left: text_layout.origin.0 + margin,
+                top: text_layout.origin.1,
+                right: text_layout.origin.0 + text_layout.extents.0,
+                bottom: text_layout.origin.1 + text_layout.extents.1
+            };
+            (*self.target).PushAxisAlignedClip(&clip_rect, D2D1_ANTIALIAS_MODE_ALIASED);
 
-                let view_origin = buffer.get_view_origin();
-                if let Some(selection_range) = buffer.get_selection_range() {
-                    self.draw_selection_range(view_origin, text_layout, selection_range);
-                }
-                if let Some(enclosing_bracket_ranges) = lexical_highlights.enclosing_brackets {
-                    self.draw_enclosing_brackets(view_origin, text_layout, enclosing_bracket_ranges)
-                }
+            // Adjust origin to account for column offset and margin
+            let adjusted_origin = (text_layout.origin.0 + margin - column_offset, text_layout.origin.1);
 
-                (*self.target).DrawTextLayout(
-                    D2D1_POINT_2F { 
-                        x: view_origin.0,
-                        y: view_origin.1
-                    },
-                    text_layout,
-                    self.theme.text_brush as *mut ID2D1Brush,
-                    D2D1_DRAW_TEXT_OPTIONS_NONE
-                );
-
-                if draw_caret {
-                    if let Some(rect) = buffer.get_caret_rect() {
-                        (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
-                        (*self.target).FillRectangle(&rect, self.theme.caret_brush as *mut ID2D1Brush);
-                        (*self.target).SetAntialiasMode(D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-                    }
-                }
-                (*self.target).PopLayer();
-            }
-
-            self.draw_renderable_region(status_bar, self.theme.status_bar_brush as *mut ID2D1Brush, self.theme.text_brush as *mut ID2D1Brush);
-            self.draw_renderable_region(file_tree, self.theme.status_bar_brush as *mut ID2D1Brush, self.theme.text_brush as *mut ID2D1Brush);
-
-            if let Some(hover_rect) = file_tree.hovered_line_rect {
-                (*self.target).FillRectangle(&hover_rect, self.theme.selection_brush as *mut ID2D1Brush);
-            }
-
-            // if let Some(file_tree_hover_selection) = file_tree.get_hover_line_selection() {
-            //     self.draw_selection_range(file_tree.origin, file_tree.get_layout(), file_tree_hover_selection);
-            // }
+            self.draw_text(adjusted_origin, text_buffer, text_layout.layout);
+            self.draw_caret(adjusted_origin, text_buffer, text_layout.layout);
+            (*self.target).PopAxisAlignedClip();
 
             (*self.target).EndDraw(null_mut(), null_mut());
         }

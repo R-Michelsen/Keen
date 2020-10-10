@@ -11,10 +11,9 @@ mod buffer;
 mod settings;
 mod language_support;
 mod text_utils;
-mod status_bar;
-mod file_tree;
 
-use editor::{ Editor, RegionType, EditorCommand };
+use buffer::TextRange;
+use editor::{Editor, EditorCommand};
 
 use std::{
     ffi::OsStr,
@@ -34,16 +33,16 @@ use winapi::{
             SetWindowLongPtrW, GetWindowLongPtrW,
             UnregisterClassW, DispatchMessageW,
             TranslateMessage, GetMessageW,
-            ShowWindow, CreateWindowExW, SetCursor,
+            ShowWindow, CreateWindowExW,
             SetProcessDpiAwarenessContext, PostQuitMessage,
             DefWindowProcW, RegisterClassW, LoadCursorW, 
             SetCapture, ReleaseCapture,
             BeginPaint, EndPaint, GET_WHEEL_DELTA_WPARAM,
             CW_USEDEFAULT, MSG, IDC_ARROW, GetKeyState,
-            WM_PAINT, WM_SIZE, WM_DESTROY, WM_CHAR, IDC_SIZEWE,
+            WM_PAINT, WM_SIZE, WM_DESTROY, WM_CHAR,
             WM_MOUSEWHEEL, WM_LBUTTONDOWN, WM_ERASEBKGND, WM_MOUSELEAVE,
             WM_LBUTTONUP, WM_KEYDOWN, VK_SHIFT, VK_CONTROL,
-            WM_CREATE, CREATESTRUCTW, GWLP_USERDATA, IDC_IBEAM,
+            WM_CREATE, CREATESTRUCTW, GWLP_USERDATA,
             WM_MOUSEMOVE, WM_NCDESTROY, SW_SHOW, WM_LBUTTONDBLCLK,
             WS_OVERLAPPEDWINDOW, CS_HREDRAW, CS_VREDRAW, CS_DBLCLKS,
             WNDCLASSW, PAINTSTRUCT, InvalidateRect, DestroyWindow,
@@ -55,7 +54,7 @@ use winapi::{
     },
     shared::{
         windef::{
-            HWND, HMENU, HBRUSH, HICON, HCURSOR,
+            HWND, HMENU, HBRUSH, HICON,
             DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
         },
         minwindef::{
@@ -67,10 +66,6 @@ use winapi::{
     },
     ctypes::c_void
 };
-
-const WM_CARET_VISIBLE:     u32 = 0xC000;
-const WM_CARET_INVISIBLE:   u32 = 0xC001;
-const WM_REGION_CHANGED:    u32 = 0xC004;
 
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let editor: *mut Editor;
@@ -85,6 +80,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, (*uninit_editor).as_mut_ptr() as isize);
         editor = (*uninit_editor).as_mut_ptr();
 
+        (*editor).open_file("C:/Users/Rasmus/Desktop/Nimble/src/editor.rs");
         (*editor).draw();
     }
     else {
@@ -95,28 +91,8 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
     let ctrl_down = (GetKeyState(VK_CONTROL) & 0x80) != 0;
 
     static mut MOUSE_FROM_OUTSIDE_WINDOW: bool = false;
+    static mut CACHED_SELECTION_RANGE: TextRange = TextRange { start: 0, length: 0 }; 
     match msg {
-        WM_REGION_CHANGED => {
-            match RegionType::from_usize(wparam) {
-                RegionType::FileTree => { SetCursor(LoadCursorW(null_mut(), IDC_ARROW)); },
-                RegionType::TextBuffer => { SetCursor(LoadCursorW(null_mut(), IDC_IBEAM)); },
-                RegionType::ResizableBorder => { SetCursor(LoadCursorW(null_mut(), IDC_SIZEWE)); }
-                RegionType::StatusBar => { SetCursor(LoadCursorW(null_mut(), IDC_ARROW)); }
-                RegionType::Unknown => {}
-            }
-            InvalidateRect(hwnd, null_mut(), false as i32);
-            0
-        }
-        WM_CARET_VISIBLE => {
-            (*editor).execute_command(&EditorCommand::CaretVisible);
-            InvalidateRect(hwnd, null_mut(), false as i32);
-            0
-        }
-        WM_CARET_INVISIBLE => {
-            (*editor).execute_command(&EditorCommand::CaretInvisible);
-            InvalidateRect(hwnd, null_mut(), false as i32);
-            0
-        }
         WM_PAINT => {
             let mut ps = MaybeUninit::<PAINTSTRUCT>::uninit();
             BeginPaint(hwnd, ps.as_mut_ptr());
@@ -201,14 +177,17 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 
             let mouse_pos = (GET_X_LPARAM(lparam) as f32, GET_Y_LPARAM(lparam) as f32);
             (*editor).execute_command(&EditorCommand::MouseMove(mouse_pos));
-            // TODO (PERFORMANCE): Only invalidate in case the selection changes!
-            if (*editor).selection_active() {
-                InvalidateRect(hwnd, null_mut(), false as i32);
+            
+            // Only invalidate if selection changes for performance reasons
+            if let Some(selection) = (*editor).get_current_selection() {
+                if selection != CACHED_SELECTION_RANGE {
+                    InvalidateRect(hwnd, null_mut(), false as i32);
+                    CACHED_SELECTION_RANGE = selection;
+                }
             }
             0
         }
         WM_MOUSELEAVE => {
-            (*editor).mouse_left_window();
             MOUSE_FROM_OUTSIDE_WINDOW = true;
             0
         }
@@ -226,8 +205,8 @@ fn main() {
         // 2 | 4 = COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE
         CoInitializeEx(null_mut(), 2 | 4);
 
-        let wnd_name: Vec<u16> = OsStr::new("Keen").encode_wide().chain(once(0)).collect();
-        let wnd_class_name: Vec<u16> = OsStr::new("Keen_Class").encode_wide().chain(once(0)).collect();
+        let wnd_name: Vec<u16> = OsStr::new("Nimble").encode_wide().chain(once(0)).collect();
+        let wnd_class_name: Vec<u16> = OsStr::new("Nimble_Class").encode_wide().chain(once(0)).collect();
 
         let wnd_class = WNDCLASSW {
             style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
@@ -236,7 +215,7 @@ fn main() {
             lpszMenuName: 0 as LPCWSTR,
             hInstance: 0 as HINSTANCE,
             hIcon: 0 as HICON,
-            hCursor: 0 as HCURSOR,
+            hCursor: LoadCursorW(null_mut(), IDC_ARROW),
             hbrBackground: GetStockObject(BLACK_BRUSH as i32) as HBRUSH,
             cbClsExtra: 0,
             cbWndExtra: 0
