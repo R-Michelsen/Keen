@@ -333,7 +333,7 @@ impl TextRenderer {
                 (*text_layout.layout).HitTestPoint(
                     mouse_pos.0 - adjusted_origin.0,
                     mouse_pos.1 - adjusted_origin.1,
-                    &mut text_buffer.caret_trailing,
+                    text_buffer.get_caret_trailing_as_mut_ref(),
                     &mut is_inside,
                     metrics_uninit.as_mut_ptr()
                 )
@@ -517,7 +517,7 @@ impl TextRenderer {
             unsafe {
                 hr_ok!((*text_layout).HitTestTextPosition(
                     caret_offset as u32,
-                    text_buffer.caret_trailing,
+                    text_buffer.get_caret_trailing(),
                     &mut caret_pos.0,
                     &mut caret_pos.1,
                     metrics_uninit.as_mut_ptr()

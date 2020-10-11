@@ -6,7 +6,7 @@ use std::{
     os::windows::ffi::OsStrExt
 };
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum CharType {
     Word,
     Punctuation,

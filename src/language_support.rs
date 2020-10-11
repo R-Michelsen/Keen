@@ -28,7 +28,7 @@ pub const RUST_KEYWORDS: [&str; 38] = ["as", "break", "const", "continue", "crat
 pub const RUST_FILE_EXTENSIONS: [&str; 1] = ["rs"];
 pub const RUST_LANGUAGE_IDENTIFIER: &str = "rust";
 
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub enum SemanticTokenTypes {
     Comment,
     Keyword,

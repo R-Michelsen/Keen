@@ -13,17 +13,15 @@ use winapi::{
     um::{
         combaseapi::{CoCreateInstance, CLSCTX_ALL},
         shobjidl::{IFileOpenDialog, FOS_PICKFOLDERS},
-        shobjidl_core::{IShellItem, FileOpenDialog, SIGDN_FILESYSPATH},
-        winuser::{VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_TAB, VK_RETURN, VK_DELETE, VK_BACK} 
+        shobjidl_core::{IShellItem, FileOpenDialog, SIGDN_FILESYSPATH}
     }
 };
 
 use crate::{
-    settings::{SCROLL_LINES_PER_MOUSEMOVE, SCROLL_LINES_PER_ROLL, 
-     NUMBER_OF_SPACES_PER_TAB, SCROLL_ZOOM_DELTA},
+    settings::{SCROLL_LINES_PER_MOUSEMOVE, SCROLL_LINES_PER_ROLL, SCROLL_ZOOM_DELTA},
     renderer::TextRenderer,
     language_support::{CPP_FILE_EXTENSIONS, CPP_LANGUAGE_IDENTIFIER, RUST_FILE_EXTENSIONS, RUST_LANGUAGE_IDENTIFIER},
-    buffer::{TextRange, TextBuffer, SelectionMode},
+    buffer::{BufferCommand, TextRange, TextBuffer},
     hr_ok
 };
 
@@ -33,7 +31,7 @@ type CtrlDown = bool;
 
 const TEXT_ORIGIN: (f32, f32) = (0.0_f32, 0.0_f32);
 
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub enum EditorCommand {
     ScrollUp(CtrlDown),
     ScrollDown(CtrlDown),
@@ -51,9 +49,6 @@ pub struct Editor {
 
     buffers: HashMap<String, TextBuffer>,
     current_buffer: String,
-
-    mouse_pos: (f32, f32),
-    mouse_pos_captured: bool
 }
 
 impl Editor {
@@ -64,9 +59,6 @@ impl Editor {
 
             buffers: HashMap::new(),
             current_buffer: "".to_owned(),
-
-            mouse_pos: (0.0, 0.0),
-            mouse_pos_captured: false
         }
     }
 
@@ -119,14 +111,6 @@ impl Editor {
         }
     }
 
-    pub fn capture_mouse(&mut self) {
-        self.mouse_pos_captured = true;
-    }
-
-    pub fn release_mouse(&mut self) {
-        self.mouse_pos_captured = false;
-    }
-
     pub fn get_current_selection(&self) -> Option<TextRange> {
         if let Some(buffer) = self.buffers.get(&self.current_buffer) {
             return buffer.get_selection_range();
@@ -174,114 +158,8 @@ impl Editor {
         text_renderer.update_text_format(zoom_delta);
     }
 
-    fn execute_buffer_command(&mut self, cmd: &EditorCommand) {
-        if let Some(buffer) = self.buffers.get_mut(&self.current_buffer) {
-            match *cmd {
-                EditorCommand::ScrollUp(ctrl_down) => {
-                    match ctrl_down {
-                        true => {
-                            Self::change_font_size(SCROLL_ZOOM_DELTA, &mut self.renderer);
-                            buffer.refresh_metrics(self.renderer.get_max_rows(), self.renderer.get_max_columns());
-                            buffer.view_dirty = true;
-                        },
-                        false => { buffer.scroll_up(SCROLL_LINES_PER_ROLL); }
-                    }
-                }
-                EditorCommand::ScrollDown(ctrl_down) => {
-                    match ctrl_down {
-                        true => {
-                            Self::change_font_size(-SCROLL_ZOOM_DELTA, &mut self.renderer);
-                            buffer.refresh_metrics(self.renderer.get_max_rows(), self.renderer.get_max_columns());
-                            buffer.view_dirty = true;
-                        }
-                        false => { buffer.scroll_down(SCROLL_LINES_PER_ROLL); }
-                    }
-                }
-                EditorCommand::LeftClick(mouse_pos, shift_down) => {
-                    let text_pos = self.renderer.mouse_pos_to_text_pos(buffer, mouse_pos);
-                    buffer.left_click(text_pos, shift_down);
-                }
-                EditorCommand::LeftDoubleClick(mouse_pos) => {
-                    let text_pos = self.renderer.mouse_pos_to_text_pos(buffer, mouse_pos);
-                    buffer.left_double_click(text_pos);
-                }
-                EditorCommand::LeftRelease => buffer.left_release(),
-                EditorCommand::MouseMove(mouse_pos) => {
-                    let extents = self.renderer.get_extents();
-                    if mouse_pos.1 > (TEXT_ORIGIN.1 + extents.1) {
-                        buffer.scroll_down(SCROLL_LINES_PER_MOUSEMOVE);
-                    }
-                    else if mouse_pos.1 < TEXT_ORIGIN.1 {
-                        buffer.scroll_up(SCROLL_LINES_PER_MOUSEMOVE);
-                    }
-                    if mouse_pos.0 > (TEXT_ORIGIN.0 + extents.0) {
-                        buffer.scroll_right(SCROLL_LINES_PER_MOUSEMOVE);
-                    }
-                    else if mouse_pos.0 < TEXT_ORIGIN.0 {
-                        buffer.scroll_left(SCROLL_LINES_PER_MOUSEMOVE);
-                    }
-                    if buffer.currently_selecting {
-                        let text_pos = self.renderer.mouse_pos_to_text_pos(buffer, mouse_pos);
-                        buffer.set_mouse_selection(text_pos);
-                    }
-                }
-                EditorCommand::KeyPressed(key, shift_down, ctrl_down) => { 
-                    match (key, ctrl_down) {
-                        (VK_LEFT, false)   => buffer.move_left(shift_down),
-                        (VK_LEFT, true)    => buffer.move_left_by_word(shift_down),
-                        (VK_RIGHT, false)  => buffer.move_right(shift_down),
-                        (VK_RIGHT, true)   => buffer.move_right_by_word(shift_down),
-                        (VK_DOWN, _)       => buffer.set_selection(SelectionMode::Down, 1, shift_down),
-                        (VK_UP, _)         => buffer.set_selection(SelectionMode::Up, 1, shift_down),
-                        (VK_TAB, _)        => {
-                            buffer.insert_chars(" ".repeat(NUMBER_OF_SPACES_PER_TAB).as_str());
-                        },
-                        (VK_RETURN, false) => {
-                            buffer.insert_newline();
-                        },
-                        (VK_DELETE, false) => {
-                            buffer.delete_right();
-                        },
-                        (VK_DELETE, true) => {
-                            buffer.delete_right_by_word();
-                        },
-                        (VK_BACK, false) => {
-                            buffer.delete_left();
-                        },
-                        (VK_BACK, true) => {
-                            buffer.delete_left_by_word();
-                        },
-                        // CTRL+A (Select all)
-                        (0x41, true) => {
-                            buffer.select_all();
-                        }
-                        // CTRL+C (Copy)
-                        (0x43, true) => {
-                            buffer.copy_selection(self.hwnd);
-                        },
-                        // CTRL+X (Cut)
-                        (0x58, true) => {
-                            buffer.cut_selection(self.hwnd);
-                        },
-                        // CTRL+V (Paste)
-                        (0x56, true) => {
-                            buffer.paste(self.hwnd);
-                        }
-                        _ => {}
-                    }
-                }
-                EditorCommand::CharInsert(character) => {
-                    buffer.insert_char(character);
-                }
-            }
-        }
-    }
-
     pub fn execute_command(&mut self, cmd: &EditorCommand) {
         match *cmd {
-            EditorCommand::MouseMove(mouse_pos) if !self.mouse_pos_captured => {
-                self.mouse_pos = mouse_pos;
-            }
             EditorCommand::KeyPressed(key, _, ctrl_down) => { 
                 match (key, ctrl_down) {
                     (0x4F, true) => self.open_workspace(),
@@ -292,5 +170,60 @@ impl Editor {
         }
 
         self.execute_buffer_command(cmd);
+    }
+
+    fn execute_buffer_command(&mut self, cmd: &EditorCommand) {
+        if let Some(buffer) = self.buffers.get_mut(&self.current_buffer) {
+            match *cmd {
+                EditorCommand::ScrollUp(ctrl_down) => {
+                    match ctrl_down {
+                        true => {
+                            Self::change_font_size(SCROLL_ZOOM_DELTA, &mut self.renderer);
+                            buffer.refresh_metrics(self.renderer.get_max_rows(), self.renderer.get_max_columns());
+                        },
+                        false => { buffer.execute_command(&BufferCommand::ScrollUp(SCROLL_LINES_PER_ROLL)); }
+                    }
+                }
+                EditorCommand::ScrollDown(ctrl_down) => {
+                    match ctrl_down {
+                        true => {
+                            Self::change_font_size(-SCROLL_ZOOM_DELTA, &mut self.renderer);
+                            buffer.refresh_metrics(self.renderer.get_max_rows(), self.renderer.get_max_columns());
+                        }
+                        false => { buffer.execute_command(&BufferCommand::ScrollDown(SCROLL_LINES_PER_ROLL)); }
+                    }
+                }
+                EditorCommand::LeftClick(mouse_pos, shift_down) => {
+                    let text_pos = self.renderer.mouse_pos_to_text_pos(buffer, mouse_pos);
+                    buffer.execute_command(&BufferCommand::LeftClick(text_pos, shift_down));
+                }
+                EditorCommand::LeftDoubleClick(mouse_pos) => {
+                    let text_pos = self.renderer.mouse_pos_to_text_pos(buffer, mouse_pos);
+                    buffer.execute_command(&BufferCommand::LeftDoubleClick(text_pos));
+                }
+                EditorCommand::LeftRelease => buffer.execute_command(&BufferCommand::LeftRelease),
+                EditorCommand::MouseMove(mouse_pos) => {
+                    let extents = self.renderer.get_extents();
+                    if mouse_pos.1 > (TEXT_ORIGIN.1 + extents.1) {
+                        buffer.execute_command(&BufferCommand::ScrollDown(SCROLL_LINES_PER_MOUSEMOVE));
+                    }
+                    else if mouse_pos.1 < TEXT_ORIGIN.1 {
+                        buffer.execute_command(&BufferCommand::ScrollUp(SCROLL_LINES_PER_MOUSEMOVE));
+                    }
+                    if mouse_pos.0 > (TEXT_ORIGIN.0 + extents.0) {
+                        buffer.execute_command(&BufferCommand::ScrollRight(SCROLL_LINES_PER_MOUSEMOVE));
+                    }
+                    else if mouse_pos.0 < TEXT_ORIGIN.0 {
+                        buffer.execute_command(&BufferCommand::ScrollLeft(SCROLL_LINES_PER_MOUSEMOVE));
+                    }
+                    if buffer.currently_selecting {
+                        let text_pos = self.renderer.mouse_pos_to_text_pos(buffer, mouse_pos);
+                        buffer.execute_command(&BufferCommand::SetMouseSelection(text_pos));
+                    }
+                }
+                EditorCommand::KeyPressed(key, shift_down, ctrl_down) => buffer.execute_command(&BufferCommand::KeyPressed(key, shift_down, ctrl_down, self.hwnd)),
+                EditorCommand::CharInsert(character) => buffer.execute_command(&BufferCommand::CharInsert(character))
+            }
+        }
     }
 }

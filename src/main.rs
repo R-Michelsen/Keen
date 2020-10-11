@@ -137,7 +137,6 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         }
         WM_LBUTTONDOWN => {
             SetCapture(hwnd);
-            (*editor).capture_mouse();
             let mouse_pos = (GET_X_LPARAM(lparam) as f32, GET_Y_LPARAM(lparam) as f32);
             (*editor).execute_command(&EditorCommand::LeftClick(mouse_pos, shift_down));
             InvalidateRect(hwnd, null_mut(), false as i32);
@@ -151,7 +150,6 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         }
         WM_LBUTTONUP => {
             ReleaseCapture();
-            (*editor).release_mouse();
             (*editor).execute_command(&EditorCommand::LeftRelease);
             InvalidateRect(hwnd, null_mut(), false as i32);
             0
