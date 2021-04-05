@@ -2,11 +2,10 @@
 Nimble - A minimalist text editor in Rust
 
 # Goals
-- A fast minimal text editor with
-  - Easy code navigation
-  - Syntax highlighting
-  - Code completion
+- Easy code navigation
+- Code completion
+- Simple syntax highlighting
 
-# Current Feature-Set
-- Basic text editor functionality, excluding search and multiple cursors
-- DirectWrite font rendering with arbitrary font scaling and font ligatures.
+# Current Feature Set
+- Basic text editor functionality
+- DirectWrite font rendering
