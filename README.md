@@ -1,5 +1,6 @@
 # Nimble
 Nimble - A minimalist text editor in Rust
+![](media/editor.png)
 
 # Goals
 - Easy code navigation
