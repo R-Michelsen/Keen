@@ -1,6 +1,8 @@
 use crate::text_utils;
 use std::collections::HashMap;
-use winapi::um::dwrite::DWRITE_TEXT_RANGE;
+use bindings::{
+    Windows::Win32::DirectWrite::*,
+};
 use ropey::iter::Chars;
 
 

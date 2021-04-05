@@ -12,13 +12,10 @@ use std::{
     ptr::copy_nonoverlapping,
     str
 };
-use winapi::{
-    um::{
-        winbase::{GlobalAlloc, GlobalFree, GlobalLock, GlobalUnlock, GlobalSize, GMEM_DDESHARE, GMEM_ZEROINIT},
-        winuser::{OpenClipboard, CloseClipboard, EmptyClipboard, GetClipboardData, SetClipboardData, CF_TEXT,
-                  VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_TAB, VK_RETURN, VK_DELETE, VK_BACK}
-    },
-    shared::windef::HWND
+use bindings::{
+    Windows::Win32::SystemServices::*,
+    Windows::Win32::DataExchange::*,
+    Windows::Win32::WindowsAndMessaging::*,
 };
 
 use ropey::Rope;
@@ -57,7 +54,7 @@ pub enum BufferCommand {
     LeftDoubleClick(TextPos),
     LeftRelease,
     SetMouseSelection(TextPos),
-    KeyPressed(i32, ShiftDown, CtrlDown, HWND),
+    KeyPressed(u32, ShiftDown, CtrlDown, HWND),
     CharInsert(u16)
 }
 
@@ -67,7 +64,7 @@ pub struct BufferState {
 
     caret_char_anchor: usize,
     caret_char_pos: usize,
-    caret_trailing: i32,
+    caret_trailing: BOOL,
 
     char_absolute_pos_start: usize,
     char_absolute_pos_end: usize,
@@ -81,7 +78,7 @@ pub struct TextBuffer {
     rope: Rope,
     caret_char_anchor: usize,
     caret_char_pos: usize,
-    caret_trailing: i32,
+    caret_trailing: BOOL,
     char_absolute_pos_start: usize,
     char_absolute_pos_end: usize,
 
@@ -116,7 +113,7 @@ impl TextBuffer {
             rope: Rope::from_reader(file).unwrap(),
             caret_char_anchor: 0,
             caret_char_pos: 0,
-            caret_trailing: 0,
+            caret_trailing: BOOL::from(false),
             char_absolute_pos_start: 0,
             char_absolute_pos_end: 0,
 
@@ -183,7 +180,7 @@ impl TextBuffer {
 
     #[inline(always)]
     fn get_caret_absolute_pos(&self) -> usize {
-        self.caret_char_pos + (self.caret_trailing as usize)
+        self.caret_char_pos + (self.caret_trailing.0 as usize)
     }
 
     pub fn scroll_up(&mut self, lines_per_roll: usize) {
@@ -305,7 +302,7 @@ impl TextBuffer {
                 else {
                     self.caret_char_pos = self.rope.len_chars();
                 }
-                self.caret_trailing = 0;
+                self.caret_trailing = BOOL::from(false);
 
                 // Reset the cached width
                 self.cached_column_offset = 0;
@@ -340,7 +337,7 @@ impl TextBuffer {
                 let new_offset = min(target_line_length, desired_offset as usize);
 
                 self.caret_char_pos = self.rope.line_to_char(target_line_idx) + new_offset;
-                self.caret_trailing = 0;
+                self.caret_trailing = BOOL::from(false);
 
                 if target_line_idx >= self.get_last_line() {
                     self.scroll_down(1);
@@ -366,13 +363,13 @@ impl TextBuffer {
         // If we're at the end of the rope, the caret shall not be trailing
         // otherwise we will be inserting out of bounds on the rope
         if self.caret_char_pos == self.rope.len_chars() {
-            self.caret_trailing = 0;
+            self.caret_trailing = BOOL::from(false);
         }
     }
 
     pub fn select_all(&mut self) {
         self.caret_char_anchor = 0;
-        self.caret_trailing = 0;
+        self.caret_trailing = BOOL::from(false);
         self.caret_char_pos = self.rope.len_chars();
     }
 
@@ -391,7 +388,7 @@ impl TextBuffer {
             self.caret_char_pos = caret_absolute_pos - caret_anchor_delta;
         };
 
-        self.caret_trailing = 0;
+        self.caret_trailing = BOOL::from(false);
         self.ensure_caret_visible();
     }
 
@@ -607,8 +604,8 @@ impl TextBuffer {
 
     pub fn copy_selection(&mut self, hwnd: HWND) {
         unsafe {
-            if OpenClipboard(hwnd) > 0 {
-                if EmptyClipboard() > 0 {
+            if OpenClipboard(hwnd).0 > 0 {
+                if EmptyClipboard().0 > 0 {
                     let data = self.get_selection_data();
                     if data.is_empty() {
                         CloseClipboard();
@@ -616,8 +613,8 @@ impl TextBuffer {
                     }
                     // +1 since str.len() returns the length minus the null-byte
                     let byte_size = data.len() + 1;
-                    let clipboard_data_ptr = GlobalAlloc(GMEM_DDESHARE | GMEM_ZEROINIT, byte_size);
-                    if !clipboard_data_ptr.is_null() {
+                    let clipboard_data_ptr = GlobalAlloc(GlobalAlloc_uFlags::GMEM_ZEROINIT, byte_size);
+                    if !clipboard_data_ptr != 0 {
                         let memory = GlobalLock(clipboard_data_ptr);
                         if !memory.is_null() {
                             copy_nonoverlapping(data.as_ptr(), memory as *mut u8, byte_size);
@@ -625,7 +622,7 @@ impl TextBuffer {
 
                             // If setting the clipboard data fails, free it
                             // otherwise its now owned by the system
-                            if SetClipboardData(CF_TEXT, clipboard_data_ptr).is_null() {
+                            if SetClipboardData(CLIPBOARD_FORMATS::CF_TEXT.0, HANDLE(clipboard_data_ptr)) == HANDLE(0) {
                                 GlobalFree(clipboard_data_ptr);
                             }
                         }
@@ -658,7 +655,7 @@ impl TextBuffer {
 
         // Update caret position
         self.caret_char_pos = current_line_chars;
-        self.caret_trailing = 0;
+        self.caret_trailing = BOOL::from(false);
         self.caret_char_anchor = self.caret_char_pos;
 
         self.rope.remove(current_line_chars..current_line_chars + current_line_length);
@@ -666,11 +663,11 @@ impl TextBuffer {
 
     pub fn paste(&mut self, hwnd: HWND) {
         unsafe {
-            if OpenClipboard(hwnd) > 0 {
-                let clipboard_data_ptr = GetClipboardData(CF_TEXT);
-                if !clipboard_data_ptr.is_null() {
-                    let byte_size = GlobalSize(clipboard_data_ptr);
-                    let memory = GlobalLock(clipboard_data_ptr);
+            if OpenClipboard(hwnd).0 > 0 {
+                let clipboard_data_ptr = GetClipboardData(CLIPBOARD_FORMATS::CF_TEXT.0);
+                if clipboard_data_ptr != HANDLE(0) {
+                    let byte_size = GlobalSize(clipboard_data_ptr.0 as isize);
+                    let memory = GlobalLock(clipboard_data_ptr.0 as isize);
 
                     let slice: &[u8] = core::slice::from_raw_parts_mut(memory as *mut u8, byte_size as usize);
 
@@ -678,7 +675,7 @@ impl TextBuffer {
                     let chars = std::str::from_utf8_unchecked(slice).trim_end_matches('\0');
 
                     self.insert_chars(chars);
-                    GlobalUnlock(clipboard_data_ptr);
+                    GlobalUnlock(clipboard_data_ptr.0 as isize);
                 }
 
                 CloseClipboard();
@@ -896,11 +893,11 @@ impl TextBuffer {
         text_utils::to_os_str(str::from_utf8(chars.as_ref()).unwrap())
     }
 
-    pub fn get_caret_trailing(&self) -> i32 {
+    pub fn get_caret_trailing(&self) -> BOOL {
         self.caret_trailing
     }
 
-    pub fn get_caret_trailing_as_mut_ref(&mut self) -> &mut i32 {
+    pub fn get_caret_trailing_as_mut_ref(&mut self) -> &mut BOOL {
         &mut self.caret_trailing
     }
 

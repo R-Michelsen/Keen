@@ -1,11 +1,11 @@
 [package]
-name = "nimble"
+name = "bindings"
 version = "0.1.0"
 authors = ["Rasmus Michelsen <RMichelsen46@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-bindings = { path = "bindings" }
 windows = "0.7.0"
-ropey = "1.2.0"
-widestring = "0.4.3"
+
+[build-dependencies]
+windows = "0.7.0"

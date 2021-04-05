@@ -1,28 +1,20 @@
 use std::{
     collections::HashMap,
     str,
-    path::Path,
-    ptr::null_mut,
-    slice::from_raw_parts
+    path::Path
 };
-use winapi::{
-    Class,
-    Interface,
-    ctypes::c_void,
-    shared::windef::HWND,
-    um::{
-        combaseapi::{CoCreateInstance, CLSCTX_ALL},
-        shobjidl::{IFileOpenDialog, FOS_PICKFOLDERS},
-        shobjidl_core::{IShellItem, FileOpenDialog, SIGDN_FILESYSPATH}
-    }
+
+use bindings::{
+    Windows::Win32::WindowsAndMessaging::*,
 };
+use windows::Result;
 
 use crate::{
     settings::{SCROLL_LINES_PER_MOUSEMOVE, SCROLL_LINES_PER_ROLL, SCROLL_ZOOM_DELTA},
     renderer::TextRenderer,
     language_support::{CPP_FILE_EXTENSIONS, CPP_LANGUAGE_IDENTIFIER, RUST_FILE_EXTENSIONS, RUST_LANGUAGE_IDENTIFIER},
     buffer::{BufferCommand, TextRange, TextBuffer},
-    hr_ok
+    util::unwrap_hresult
 };
 
 type MousePos = (f32, f32);
@@ -39,7 +31,7 @@ pub enum EditorCommand {
     LeftDoubleClick(MousePos),
     LeftRelease,
     MouseMove(MousePos),
-    KeyPressed(i32, ShiftDown, CtrlDown),
+    KeyPressed(u32, ShiftDown, CtrlDown),
     CharInsert(u16)
 }
 
@@ -52,14 +44,13 @@ pub struct Editor {
 }
 
 impl Editor {
-    pub fn new(hwnd: HWND) -> Self {
-        Self {
+    pub fn new(hwnd: HWND) -> Result<Self> {
+        Ok(Self {
             hwnd,
-            renderer: TextRenderer::new(hwnd, "Consolas", 20.0),
-
+            renderer: TextRenderer::new(hwnd, "Consolas", 20.0)?,
             buffers: HashMap::new(),
             current_buffer: "".to_owned(),
-        }
+        })
     }
 
     pub fn open_file(&mut self, path: &str) {
@@ -94,16 +85,16 @@ impl Editor {
         let current_buffer = self.buffers.get_mut(&self.current_buffer);
         if let Some(buffer) = current_buffer {
             if buffer.view_dirty {
-                self.renderer.update_buffer_layout(TEXT_ORIGIN, self.renderer.get_extents(), buffer);
-                self.renderer.update_buffer_line_number_layout(TEXT_ORIGIN, self.renderer.get_extents(), buffer);
+                unwrap_hresult(self.renderer.update_buffer_layout(TEXT_ORIGIN, self.renderer.get_extents(), buffer));
+                unwrap_hresult(self.renderer.update_buffer_line_number_layout(TEXT_ORIGIN, self.renderer.get_extents(), buffer));
                 buffer.view_dirty = false;
             }
-            self.renderer.draw(buffer);
+            unwrap_hresult(self.renderer.draw(buffer));
         }
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
-        self.renderer.resize(width, height);
+        unwrap_hresult(self.renderer.resize(width, height));
 
         for buffer in self.buffers.values_mut() {
             buffer.refresh_metrics(self.renderer.get_max_rows(), self.renderer.get_max_columns());
@@ -119,43 +110,43 @@ impl Editor {
     }
 
     fn open_workspace(&mut self) {
-        let mut file_dialog: *mut IFileOpenDialog = null_mut();
+        // let mut file_dialog: *mut IFileOpenDialog = null_mut();
 
-        unsafe {
-            hr_ok!(
-                CoCreateInstance(
-                    &FileOpenDialog::uuidof(),
-                    null_mut(), 
-                    CLSCTX_ALL, 
-                    &IFileOpenDialog::uuidof(),
-                    (&mut file_dialog as *mut *mut _) as *mut *mut c_void
-                )
-            );
+        // unsafe {
+        //     hr_ok!(
+        //         CoCreateInstance(
+        //             &FileOpenDialog::uuidof(),
+        //             null_mut(), 
+        //             CLSCTX_ALL, 
+        //             &IFileOpenDialog::uuidof(),
+        //             (&mut file_dialog as *mut *mut _) as *mut *mut c_void
+        //         )
+        //     );
 
-            hr_ok!((*file_dialog).SetOptions(FOS_PICKFOLDERS));
-            hr_ok!((*file_dialog).Show(null_mut()));
+        //     hr_ok!((*file_dialog).SetOptions(FOS_PICKFOLDERS));
+        //     hr_ok!((*file_dialog).Show(null_mut()));
 
-            let mut shell_item: *mut IShellItem = null_mut();
-            hr_ok!((*file_dialog).GetResult(&mut shell_item));
+        //     let mut shell_item: *mut IShellItem = null_mut();
+        //     hr_ok!((*file_dialog).GetResult(&mut shell_item));
 
-            let mut folder_path: *mut u16 = null_mut();
-            hr_ok!((*shell_item).GetDisplayName(SIGDN_FILESYSPATH, &mut folder_path)); 
+        //     let mut folder_path: *mut u16 = null_mut();
+        //     hr_ok!((*shell_item).GetDisplayName(SIGDN_FILESYSPATH, &mut folder_path)); 
 
-            // We need to get the length of the folder path manually...
-            let mut length = 0;
-            while (*folder_path.add(length)) != 0x0000 {
-                length += 1;
-            }
+        //     // We need to get the length of the folder path manually...
+        //     let mut length = 0;
+        //     while (*folder_path.add(length)) != 0x0000 {
+        //         length += 1;
+        //     }
 
-            let slice = from_raw_parts(folder_path, length);
+        //     let slice = from_raw_parts(folder_path, length);
 
-            (*shell_item).Release();
-            (*file_dialog).Release();
-        }
+        //     (*shell_item).Release();
+        //     (*file_dialog).Release();
+        // }
     }
 
     fn change_font_size(zoom_delta: f32, text_renderer: &mut TextRenderer) {
-        text_renderer.update_text_format(zoom_delta);
+        unwrap_hresult(text_renderer.update_text_format());
     }
 
     pub fn execute_command(&mut self, cmd: &EditorCommand) {
@@ -194,11 +185,11 @@ impl Editor {
                     }
                 }
                 EditorCommand::LeftClick(mouse_pos, shift_down) => {
-                    let text_pos = self.renderer.mouse_pos_to_text_pos(buffer, mouse_pos);
+                    let text_pos = unwrap_hresult(self.renderer.mouse_pos_to_text_pos(buffer, mouse_pos));
                     buffer.execute_command(&BufferCommand::LeftClick(text_pos, shift_down));
                 }
                 EditorCommand::LeftDoubleClick(mouse_pos) => {
-                    let text_pos = self.renderer.mouse_pos_to_text_pos(buffer, mouse_pos);
+                    let text_pos = unwrap_hresult(self.renderer.mouse_pos_to_text_pos(buffer, mouse_pos));
                     buffer.execute_command(&BufferCommand::LeftDoubleClick(text_pos));
                 }
                 EditorCommand::LeftRelease => buffer.execute_command(&BufferCommand::LeftRelease),
@@ -217,7 +208,7 @@ impl Editor {
                         buffer.execute_command(&BufferCommand::ScrollLeft(SCROLL_LINES_PER_MOUSEMOVE));
                     }
                     if buffer.currently_selecting {
-                        let text_pos = self.renderer.mouse_pos_to_text_pos(buffer, mouse_pos);
+                        let text_pos = unwrap_hresult(self.renderer.mouse_pos_to_text_pos(buffer, mouse_pos));
                         buffer.execute_command(&BufferCommand::SetMouseSelection(text_pos));
                     }
                 }
