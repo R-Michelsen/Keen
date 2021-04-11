@@ -40,20 +40,21 @@ pub struct TextRange {
     pub length: u32
 }
 
-type TextPos = usize;
+#[derive(Copy, Clone, PartialEq)]
+pub struct TextPosition {
+    pub line_offset: usize,
+    pub char_offset: usize
+}
+
 type ShiftDown = bool;
 type CtrlDown = bool;
 
 #[derive(PartialEq)]
 pub enum BufferCommand {
-    ScrollUp(usize),
-    ScrollDown(usize),
-    ScrollLeft(usize),
-    ScrollRight(usize),
-    LeftClick(TextPos, ShiftDown),
-    LeftDoubleClick(TextPos),
+    LeftClick(TextPosition, ShiftDown),
+    LeftDoubleClick(TextPosition),
     LeftRelease,
-    SetMouseSelection(TextPos),
+    SetMouseSelection(TextPosition),
     KeyPressed(u32, ShiftDown, CtrlDown, HWND),
     CharInsert(u16)
 }
@@ -65,9 +66,6 @@ pub struct BufferState {
     caret_char_anchor: usize,
     caret_char_pos: usize,
     caret_trailing: BOOL,
-
-    char_absolute_pos_start: usize,
-    char_absolute_pos_end: usize,
 }
 
 // TODO: undo_states should probably just be some fixed array 
@@ -75,73 +73,60 @@ pub struct BufferState {
 pub struct TextBuffer {
     pub path: String,
 
+    // The language of the text buffer as
+    // identified by its extension
+    pub language_identifier: &'static str,
+
     rope: Rope,
     caret_char_anchor: usize,
     caret_char_pos: usize,
     caret_trailing: BOOL,
-    char_absolute_pos_start: usize,
-    char_absolute_pos_end: usize,
 
     pub undo_states: Vec<BufferState>,
 
     pub view_dirty: bool,
 
-    max_rows: usize,
-    line_offset: usize,
-    max_columns: usize,
-
-    pub margin_column_count: usize,
-    pub column_offset: usize,
-
     // The selection state of the buffer should be public
     // for the editor to use
     pub currently_selecting: bool,
-
-    // The language of the text buffer as
-    // identified by its extension
-    pub language_identifier: &'static str,
 
     cached_column_offset: u32
 }
 
 impl TextBuffer {
-    pub fn new(path: &str, language_identifier: &'static str, max_rows: usize, max_columns: usize) -> Self {
+    pub fn new(path: &str, language_identifier: &'static str) -> Self {
         let file = File::open(path).unwrap();
         let mut text_buffer = Self {
             path: String::from(path),
+            language_identifier,
 
             rope: Rope::from_reader(file).unwrap(),
             caret_char_anchor: 0,
             caret_char_pos: 0,
             caret_trailing: BOOL::from(false),
-            char_absolute_pos_start: 0,
-            char_absolute_pos_end: 0,
 
             undo_states: Vec::new(),
 
             view_dirty: true,
 
-            max_rows,
-            line_offset: 0,
-            max_columns,
-            margin_column_count: 0,
-            column_offset: 0,
-
             currently_selecting: false,
-
-            language_identifier,
 
             cached_column_offset: 0,
         };
 
         text_buffer.push_undo_state();
-        text_buffer.refresh_metrics(max_rows, max_columns);
         text_buffer
     }
 
     #[inline(always)]
-    fn get_last_line(&self) -> usize {
-        self.line_offset + self.max_rows - 1
+    pub fn get_number_of_lines(&self) -> usize {
+        self.rope.len_lines()
+    }
+
+    #[inline(always)]
+    pub fn get_current_line_length(&self) -> usize {
+        let current_line = self.rope.char_to_line(self.get_caret_absolute_pos());
+        self.rope.line(current_line).len_chars()
     }
 
     #[inline(always)]
@@ -151,8 +136,6 @@ impl TextBuffer {
             caret_char_anchor: self.caret_char_anchor,
             caret_char_pos: self.caret_char_pos,
             caret_trailing: self.caret_trailing,
-            char_absolute_pos_start: self.char_absolute_pos_start,
-            char_absolute_pos_end: self.char_absolute_pos_end
         });
     }
 
@@ -164,8 +147,6 @@ impl TextBuffer {
             self.caret_char_anchor = state.caret_char_anchor;
             self.caret_char_pos = state.caret_char_pos;
             self.caret_trailing = state.caret_trailing;
-            self.char_absolute_pos_start = state.char_absolute_pos_start;
-            self.char_absolute_pos_end = state.char_absolute_pos_end;
         }
         else if self.undo_states.len() == 1 {
             let state = self.undo_states.last().unwrap();
@@ -173,8 +154,6 @@ impl TextBuffer {
             self.caret_char_anchor = state.caret_char_anchor;
             self.caret_char_pos = state.caret_char_pos;
             self.caret_trailing = state.caret_trailing;
-            self.char_absolute_pos_start = state.char_absolute_pos_start;
-            self.char_absolute_pos_end = state.char_absolute_pos_end;
         }
     }
 
@@ -183,70 +162,35 @@ impl TextBuffer {
         self.caret_char_pos + (self.caret_trailing.0 as usize)
     }
 
-    pub fn scroll_up(&mut self, lines_per_roll: usize) {
-        if self.line_offset >= lines_per_roll {
-            self.line_offset -= lines_per_roll;
-        }
-        else {
-            self.line_offset = 0;
-        }
-    }
-
-    pub fn scroll_down(&mut self, lines_per_roll: usize) {
-        let new_top = self.line_offset + lines_per_roll;
-        if new_top >= self.rope.len_lines() {
-            self.line_offset = self.rope.len_lines() - 1;
-        }
-        else {
-            self.line_offset = new_top;
-        }
-    }
-
-    pub fn scroll_left(&mut self, lines_per_roll: usize) {
-        if self.column_offset >= lines_per_roll {
-            self.column_offset -= lines_per_roll;
-        }
-        else {
-            self.column_offset = 0;
-        }
-    }
-
-    pub fn scroll_right(&mut self, lines_per_roll: usize) {
-        let current_line = self.rope.char_to_line(self.get_caret_absolute_pos());
-        let line_length = self.rope.line(current_line).len_chars();
-        let new_offset = self.column_offset + lines_per_roll;
-        if line_length > self.max_columns && new_offset > (line_length - self.max_columns) {
-            self.column_offset = line_length - self.max_columns;
-        }
-        else if line_length > self.max_columns {
-            self.column_offset = new_offset;
-        }
-    }
-
-    pub fn move_left(&mut self, shift_down: bool) {
+    #[inline(always)]
+    fn move_left(&mut self, shift_down: bool) {
         let count = if self.see_prev_chars("\r\n") { 2 } else { 1 };
         self.set_selection(SelectionMode::Left, count, shift_down);
     }
 
-    pub fn move_left_by_word(&mut self, shift_down: bool) {
+    #[inline(always)]
+    fn move_left_by_word(&mut self, shift_down: bool) {
         // Start by moving left atleast once, then get the boundary count
         self.set_selection(SelectionMode::Left, 1, shift_down);
         let count = self.get_boundary_char_count(CharSearchDirection::Backward);
         self.set_selection(SelectionMode::Left, count, shift_down);
     }
 
-    pub fn move_right(&mut self, shift_down: bool) {
+    #[inline(always)]
+    fn move_right(&mut self, shift_down: bool) {
         let count = if self.see_chars("\r\n") { 2 } else { 1 };
         self.set_selection(SelectionMode::Right, count, shift_down);
     }
 
-    pub fn move_right_by_word(&mut self, shift_down: bool) {
+    #[inline(always)]
+    fn move_right_by_word(&mut self, shift_down: bool) {
         let count = self.get_boundary_char_count(CharSearchDirection::Forward);
         self.set_selection(SelectionMode::Right, count, shift_down);
     }
 
-    pub fn left_click(&mut self, relative_text_pos: usize, extend_current_selection: bool) {
-        self.set_mouse_selection(relative_text_pos);
+    #[inline(always)]
+    fn left_click(&mut self, text_pos: TextPosition, extend_current_selection: bool) {
+        self.set_mouse_selection(text_pos);
         let caret_absolute_pos = self.get_caret_absolute_pos();
 
         if !extend_current_selection {
@@ -256,37 +200,29 @@ impl TextBuffer {
 
         // Reset the cached width
         self.cached_column_offset = 0;
-
-        // Left-click will scroll down once if on the last line
-        if self.get_last_line() == self.get_current_line() {
-            self.scroll_down(1)
-        }
     }
 
-    pub fn left_double_click(&mut self, relative_text_pos: usize) {
-        self.set_mouse_selection(relative_text_pos);
+    #[inline(always)]
+    fn left_double_click(&mut self, text_pos: TextPosition) {
+        self.set_mouse_selection(text_pos);
 
         // Find the boundary on each side of the cursor
         let left_count = self.get_boundary_char_count(CharSearchDirection::Backward);
         let right_count = self.get_boundary_char_count(CharSearchDirection::Forward);
 
+        // Set the anchor position at the left edge
+        self.caret_char_anchor = self.caret_char_pos - left_count;
+
         // Set the caret position at the right edge
         self.caret_char_pos += right_count;
-
-        // Set the anchor position at the left edge
-        self.caret_char_anchor = self.caret_char_pos - (left_count + right_count);
-
-        // Left-click will scroll down once if on the last line
-        if self.get_last_line() == self.get_current_line() {
-            self.scroll_down(1)
-        }
     }
 
-    pub fn left_release(&mut self) {
+    #[inline(always)]
+    fn left_release(&mut self) {
         self.currently_selecting = false;
     }
 
-    pub fn set_selection(&mut self, mode: SelectionMode, count: usize, extend_current_selection: bool) {
+    fn set_selection(&mut self, mode: SelectionMode, count: usize, extend_current_selection: bool) {
         match mode {
             SelectionMode::Left | SelectionMode::Right => {
                 self.caret_char_pos = self.get_caret_absolute_pos();
@@ -338,25 +274,18 @@ impl TextBuffer {
 
                 self.caret_char_pos = self.rope.line_to_char(target_line_idx) + new_offset;
                 self.caret_trailing = BOOL::from(false);
-
-                if target_line_idx >= self.get_last_line() {
-                    self.scroll_down(1);
-                }
-                else if target_line_idx < self.line_offset {
-                    self.scroll_up(1);
-                }
-
             }
         }
 
         if !extend_current_selection {
             self.caret_char_anchor = self.get_caret_absolute_pos();
         }
+        self.view_dirty = true;
     }
 
-    pub fn set_mouse_selection(&mut self, relative_text_pos: usize) {
+    fn set_mouse_selection(&mut self, text_pos: TextPosition) {
         self.caret_char_pos = min(
-            self.char_absolute_pos_start + relative_text_pos, 
+            self.rope.line_to_char(text_pos.line_offset) + text_pos.char_offset, 
             self.rope.len_chars()
         );
 
@@ -367,13 +296,13 @@ impl TextBuffer {
         }
     }
 
-    pub fn select_all(&mut self) {
+    fn select_all(&mut self) {
         self.caret_char_anchor = 0;
         self.caret_trailing = BOOL::from(false);
         self.caret_char_pos = self.rope.len_chars();
     }
 
-    pub fn delete_selection(&mut self) {
+    fn delete_selection(&mut self) {
         let caret_absolute_pos = self.get_caret_absolute_pos();
 
         let caret_anchor = self.caret_char_anchor;
@@ -389,10 +318,10 @@ impl TextBuffer {
         };
 
         self.caret_trailing = BOOL::from(false);
-        self.ensure_caret_visible();
+        self.view_dirty = true;
     }
 
-    pub fn insert_newline(&mut self) {
+    fn insert_newline(&mut self) {
         let offset = self.get_leading_whitespace_offset();
 
         // Search back for an open bracket, to see if auto indentation might
@@ -438,7 +367,7 @@ impl TextBuffer {
         self.insert_chars(format!("{}{}", "\r\n", " ".repeat(offset)).as_str())
     }
 
-    pub fn insert_bracket(&mut self, bracket_pair: (char, char)) {
+    fn insert_bracket(&mut self, bracket_pair: (char, char)) {
         // When inserting an opening bracket,
         // we will insert its corresponding closing bracket 
         // next to it.
@@ -446,7 +375,7 @@ impl TextBuffer {
         self.set_selection(SelectionMode::Left, 1, false);
     }
 
-    pub fn insert_chars(&mut self, chars: &str) {
+    fn insert_chars(&mut self, chars: &str) {
         // If we are currently selecting text, 
         // delete text before insertion
         if self.get_caret_absolute_pos() != self.caret_char_anchor {
@@ -457,10 +386,10 @@ impl TextBuffer {
 
         self.rope.insert(caret_absolute_pos, chars);
         self.set_selection(SelectionMode::Right, chars.len(), false);
-        self.ensure_caret_visible();
+        self.view_dirty = true;
     }
 
-    pub fn insert_char(&mut self, character: u16) {
+    fn insert_char(&mut self, character: u16) {
         let chr = (character as u8) as char;
 
         // If we are currently selecting text, 
@@ -481,6 +410,7 @@ impl TextBuffer {
             if chr == brackets.1 {
                 if self.rope.char(caret_absolute_pos) == brackets.1 {
                     self.set_selection(SelectionMode::Right, 1, false);
+                    return;
                 }
                 // Otherwise if possible move the scope indent back once
                 else {
@@ -497,10 +427,10 @@ impl TextBuffer {
 
         self.rope.insert_char(caret_absolute_pos, chr);
         self.set_selection(SelectionMode::Right, 1, false);
-        self.ensure_caret_visible();
+        self.view_dirty = true;
     }
 
-    pub fn delete_right(&mut self) {
+    fn delete_right(&mut self) {
         let caret_absolute_pos = self.get_caret_absolute_pos();
 
         // If we are currently selecting text, 
@@ -524,7 +454,7 @@ impl TextBuffer {
         self.rope.remove(caret_absolute_pos..next_char_pos);
     }
 
-    pub fn delete_right_by_word(&mut self) {
+    fn delete_right_by_word(&mut self) {
         let caret_absolute_pos = self.get_caret_absolute_pos();
 
         // If we are currently selecting text, 
@@ -539,7 +469,7 @@ impl TextBuffer {
         self.delete_selection();
     }
 
-    pub fn delete_left(&mut self) {
+    fn delete_left(&mut self) {
         let caret_absolute_pos = self.get_caret_absolute_pos();
 
         // If we are currently selecting text, 
@@ -564,7 +494,7 @@ impl TextBuffer {
         self.set_selection(SelectionMode::Left, offset, false);
     }
 
-    pub fn delete_left_by_word(&mut self) {
+    fn delete_left_by_word(&mut self) {
         let caret_absolute_pos = self.get_caret_absolute_pos();
 
         // If we are currently selecting text, 
@@ -583,26 +513,35 @@ impl TextBuffer {
 
     // Parses and creates ranges of highlight information directly
     // from the text buffer displayed on the screen
-    pub fn get_lexical_highlights(&mut self) -> LexicalHighlights {
+    pub fn get_lexical_highlights(&mut self, line_start: usize, line_end: usize) -> LexicalHighlights {
         let caret_absolute_pos = self.get_caret_absolute_pos();
 
-        let text_in_current_view = self.get_text_view_as_string();
-        let start_it = self.rope.chars_at(self.char_absolute_pos_start);
+        let text_in_current_view = self.get_text_view_as_string(line_start, line_end);
+        let start_it = self.rope.chars_at(self.rope.line_to_char(line_start));
         let caret_it = self.rope.chars_at(caret_absolute_pos);
 
-        highlight_text(text_in_current_view.as_str(), self.char_absolute_pos_start, 
+        highlight_text(text_in_current_view.as_str(), self.rope.line_to_char(line_start), 
                        caret_absolute_pos, self.language_identifier, start_it, caret_it)
     }
 
-    pub fn get_caret_offset(&mut self) -> Option<usize> {
-        if self.caret_char_pos < self.char_absolute_pos_start || 
-            self.caret_char_pos > self.char_absolute_pos_end {
-            return None;
-        }
-        Some(self.caret_char_pos - self.char_absolute_pos_start)
+    pub fn get_caret_line_and_column(&self) -> (usize, usize) {
+        let caret_absolute_pos = self.get_caret_absolute_pos();
+        let line = self.rope.char_to_line(caret_absolute_pos);
+        let line_start = self.rope.line_to_char(line);
+        (line, caret_absolute_pos - line_start)
     }
 
-    pub fn copy_selection(&mut self, hwnd: HWND) {
+    pub fn get_caret_offset(&mut self, line_start: usize, line_end: usize) -> Option<usize> {
+        let char_start = self.rope.line_to_char(line_start);
+        let char_end = self.rope.line_to_char(min(self.rope.len_lines(), line_end + 1));
+
+        if self.caret_char_pos < char_start || self.caret_char_pos > char_end {
+            return None;
+        }
+        Some(self.caret_char_pos - char_start)
+    }
+
+    fn copy_selection(&mut self, hwnd: HWND) {
         unsafe {
             if OpenClipboard(hwnd).0 > 0 {
                 if EmptyClipboard().0 > 0 {
@@ -636,7 +575,7 @@ impl TextBuffer {
         }
     }
 
-    pub fn cut_selection(&mut self, hwnd: HWND) {
+    fn cut_selection(&mut self, hwnd: HWND) {
         // Copy the selection
         self.copy_selection(hwnd);
 
@@ -659,9 +598,10 @@ impl TextBuffer {
         self.caret_char_anchor = self.caret_char_pos;
 
         self.rope.remove(current_line_chars..current_line_chars + current_line_length);
+        self.view_dirty = true;
     }
 
-    pub fn paste(&mut self, hwnd: HWND) {
+    fn paste(&mut self, hwnd: HWND) {
         unsafe {
             if OpenClipboard(hwnd).0 > 0 {
                 let clipboard_data_ptr = GetClipboardData(CLIPBOARD_FORMATS::CF_TEXT.0);
@@ -676,6 +616,7 @@ impl TextBuffer {
 
                     self.insert_chars(chars);
                     GlobalUnlock(clipboard_data_ptr.0 as isize);
+                    self.view_dirty = true;
                 }
 
                 CloseClipboard();
@@ -683,22 +624,25 @@ impl TextBuffer {
         }
     }
 
-    pub fn get_selection_range(&self) -> Option<TextRange> {
+    pub fn get_selection_range(&self, line_start: usize, line_end: usize) -> Option<TextRange> {
+        let char_start = self.rope.line_to_char(line_start);
+        let char_end = self.rope.line_to_char(min(self.rope.len_lines(), line_end + 1));
+
         let caret_absolute_pos = self.get_caret_absolute_pos();
         if caret_absolute_pos == self.caret_char_anchor {
             return None;
         }
  
         // Saturating sub ensures that the carets don't go below 0
-        let mut caret_begin = self.caret_char_anchor.saturating_sub(self.char_absolute_pos_start);
-        let mut caret_end = caret_absolute_pos.saturating_sub(self.char_absolute_pos_start);
+        let mut caret_begin = self.caret_char_anchor.saturating_sub(char_start);
+        let mut caret_end = caret_absolute_pos.saturating_sub(char_start);
 
         if caret_begin > caret_end {
             swap(&mut caret_begin, &mut caret_end);
         }
 
-        caret_begin = min(caret_begin, self.char_absolute_pos_end);
-        caret_end = min(caret_end, self.char_absolute_pos_end);
+        caret_begin = min(caret_begin, char_end);
+        caret_end = min(caret_end, char_end);
 
         let range =  TextRange {
             start: caret_begin as u32,
@@ -706,22 +650,6 @@ impl TextBuffer {
         };
 
         Some(range)
-    }
-
-    pub fn on_change(&mut self) {
-        self.update_margin_and_column_offset();
-        self.update_absolute_char_positions();
-        self.view_dirty = true;
-    }
-
-    pub fn refresh_metrics(&mut self, max_rows: usize, max_columns: usize) {
-        self.max_rows = max_rows;
-        self.max_columns = max_columns;
-        self.on_change();
-    }
-
-    pub fn get_current_line(&self) -> usize {
-        self.rope.char_to_line(self.get_caret_absolute_pos())
     }
 
     fn linebreaks_before_line(&self, line: usize) -> usize {
@@ -771,51 +699,6 @@ impl TextBuffer {
             },
             // If nothing is selected, copy current line
             _ => self.rope.line(self.rope.char_to_line(caret_absolute_pos)).to_string()
-        }
-    }
-
-    fn update_margin_and_column_offset(&mut self) {
-        let max_digits = text_utils::get_digits_in_number(self.get_last_line() as u32) as usize;
-        self.margin_column_count = max_digits + 1;
-
-        let caret_absolute_pos = self.get_caret_absolute_pos();
-        let current_line_pos = self.rope.line_to_char(self.rope.char_to_line(caret_absolute_pos));
-        let current_column = caret_absolute_pos - current_line_pos;
-
-        let text_columns = self.max_columns - self.margin_column_count;
-        if current_column > text_columns && self.column_offset < (current_column - text_columns) {
-            self.column_offset = current_column - text_columns;
-        }
-        else if self.column_offset > current_column {
-            self.column_offset = current_column;
-        }
-    }
-
-    fn update_absolute_char_positions(&mut self) {
-        // If the line count is less than the line offset
-        // the line offset should be set to the actual line count.
-        // self.line_offset is 0-indexed thus the +1 (and -1)
-        let line_count = self.rope.len_lines();
-        if  line_count < (self.line_offset + 1) {
-            self.line_offset = line_count - 1;
-        }
-
-        self.char_absolute_pos_start = self.rope.line_to_char(self.line_offset);
-        let last_line = self.get_last_line();
-        if last_line >= self.rope.len_lines() {
-            self.char_absolute_pos_end = self.rope.line_to_char(self.rope.len_lines());
-        }
-        else {
-            self.char_absolute_pos_end = self.rope.line_to_char(last_line) + self.rope.line(last_line).len_chars();
-        }
-    }
-
-    // Ensures that the caret is visible in the current
-    // view of the buffer
-    fn ensure_caret_visible(&mut self) {
-        let current_line = self.rope.char_to_line(self.get_caret_absolute_pos());
-        if current_line > self.get_last_line() || current_line < self.line_offset {
-            self.line_offset = current_line;
         }
     }
 
@@ -872,23 +755,13 @@ impl TextBuffer {
         count
     }
 
-    pub fn get_line_number_string(&self) -> Vec<u16> {
-        let mut nums: String = String::new();
-        let number_range_end = min(self.rope.len_lines(), self.get_last_line() + 1);
-
-        for i in self.line_offset..number_range_end {
-            nums += (i + 1).to_string().as_str();
-            nums += "\r\n";
-        }
-        text_utils::to_os_str(&nums)
+    fn get_text_view_as_string(&self, line_start: usize, line_end: usize) -> String {
+        self.rope.slice(self.rope.line_to_char(line_start)..self.rope.line_to_char(min(line_end, self.rope.len_lines()))).to_string()
     }
 
-    pub fn get_text_view_as_string(&self) -> String {
-        self.rope.slice(self.char_absolute_pos_start..self.char_absolute_pos_end).to_string()
-    }
-
-    pub fn get_text_view_as_utf16(&self) -> Vec<u16> {
-        let rope_slice = self.rope.slice(self.char_absolute_pos_start..self.char_absolute_pos_end);
+    pub fn get_text_view_as_utf16(&self, line_start: usize, line_end: usize) -> Vec<u16> {
+        // let rope_slice = self.rope.slice(self.char_absolute_pos_start..self.char_absolute_pos_end);
+        let rope_slice = self.rope.slice(self.rope.line_to_char(line_start)..self.rope.line_to_char(min(line_end, self.rope.len_lines())));
         let chars: Vec<u8> = rope_slice.bytes().collect();
         text_utils::to_os_str(str::from_utf8(chars.as_ref()).unwrap())
     }
@@ -903,20 +776,16 @@ impl TextBuffer {
 
     pub fn execute_command(&mut self, cmd: &BufferCommand) {
         match *cmd {
-            BufferCommand::ScrollUp(num_lines) => self.scroll_up(num_lines),
-            BufferCommand::ScrollDown(num_lines) => self.scroll_down(num_lines),
-            BufferCommand::ScrollLeft(num_lines) => self.scroll_left(num_lines),
-            BufferCommand::ScrollRight(num_lines) => self.scroll_right(num_lines),
-            BufferCommand::LeftClick(mouse_pos, shift_down) => self.left_click(mouse_pos, shift_down),
-            BufferCommand::LeftDoubleClick(mouse_pos) => self.left_double_click(mouse_pos),
-            BufferCommand::LeftRelease => self.left_release(),
-            BufferCommand::SetMouseSelection(mouse_pos) => self.set_mouse_selection(mouse_pos),
+            BufferCommand::LeftClick(text_pos, shift_down)              => self.left_click(text_pos, shift_down),
+            BufferCommand::LeftDoubleClick(text_pos)                    => self.left_double_click(text_pos),
+            BufferCommand::LeftRelease                                  => self.left_release(),
+            BufferCommand::SetMouseSelection(text_pos)                  => self.set_mouse_selection(text_pos),
             BufferCommand::KeyPressed(key, shift_down, ctrl_down, hwnd) => {
                 match (key, ctrl_down) {
                     (VK_LEFT, false)   => self.move_left(shift_down),
                     (VK_LEFT, true)    => self.move_left_by_word(shift_down),
-                    (VK_RIGHT, false)   => self.move_right(shift_down),
-                    (VK_RIGHT, true)    => self.move_right_by_word(shift_down),
+                    (VK_RIGHT, false)  => self.move_right(shift_down),
+                    (VK_RIGHT, true)   => self.move_right_by_word(shift_down),
                     (VK_DOWN, _)       => self.set_selection(SelectionMode::Down, 1, shift_down),
                     (VK_UP, _)         => self.set_selection(SelectionMode::Up, 1, shift_down),
                     (VK_TAB, _)        => {
@@ -975,6 +844,5 @@ impl TextBuffer {
                 self.insert_char(character);
             }
         }
-        self.on_change();
     }
 }

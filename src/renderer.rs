@@ -1,6 +1,8 @@
 use crate::{
     settings,
-    buffer::TextBuffer,
+    buffer::TextPosition,
+    editor::TextDocument,
+    editor::TextView,
     theme::Theme,
     language_support::SemanticTokenTypes,
     util::pwstr_from_str
@@ -123,12 +125,6 @@ fn get_font_width_and_height(dwrite_factory: &IDWriteFactory, text_format: &IDWr
     }
 }
 
-pub struct TextLayout {
-    origin: (f32, f32),
-    extents: (f32, f32),
-    layout: IDWriteTextLayout
-}
-
 pub struct TextRenderer {
     pub pixel_size: D2D_SIZE_U,
     pub font_size: f32,
@@ -145,8 +141,7 @@ pub struct TextRenderer {
     
     render_target: ID2D1HwndRenderTarget,
 
-    buffer_layouts: HashMap<String, TextLayout>,
-    buffer_line_number_layouts: HashMap<String, TextLayout>
+    buffer_layouts: HashMap<String, IDWriteTextLayout>
 }
 
 impl TextRenderer {
@@ -192,13 +187,13 @@ impl TextRenderer {
                 dwrite_factory,
                 text_format,
                 render_target,
-                buffer_layouts: HashMap::new(),
-                buffer_line_number_layouts: HashMap::new()
+                buffer_layouts: HashMap::new()
             })
         }
     }
 
-    pub fn update_text_format(&mut self) -> Result<()> {
+    pub fn update_text_format(&mut self, zoom_delta: f32) -> Result<()> {
+        self.font_size = f32::max(1.0, self.font_size + zoom_delta);
         unsafe {
             self.text_format = create_text_format(
                 pwstr_from_str(&self.font_name),
@@ -216,7 +211,6 @@ impl TextRenderer {
             self.font_width = font_width;
             self.font_height = font_height;
         }
-
         Ok(())
     }
 
@@ -232,24 +226,38 @@ impl TextRenderer {
         (self.pixel_size.width as f32, self.pixel_size.height as f32)
     }
 
-    fn get_text_buffer_margin(&self, text_buffer: &mut TextBuffer) -> f32 {
-        text_buffer.margin_column_count as f32 * self.font_width
+    fn adjust_text_view(&self, text_view: &mut TextView, caret_line: usize, caret_column: usize) {
+        let current_line_start = text_view.line_offset;
+        let current_line_end = current_line_start + self.get_max_rows();
+        let current_column_start = text_view.column_offset;
+        let current_column_end = current_column_start + self.get_max_columns();
+    
+        // Check for vertical adjustments
+        if !(current_line_start..current_line_end).contains(&caret_line) {
+            if caret_line < current_line_start {
+                text_view.line_offset -= current_line_start - caret_line;
+            }
+            else {
+                text_view.line_offset += caret_line - current_line_end;
+            }
+        }
+    
+        // Check for horizontal adjustments
+        if !(current_column_start..current_column_end).contains(&caret_column) {
+            if caret_column < current_column_start {
+                text_view.column_offset -= current_column_start - caret_column;
+            }
+            else {
+                text_view.column_offset += caret_column - current_column_end;
+            }
+        }    
     }
 
-    fn get_text_buffer_column_offset(&self, text_buffer: &mut TextBuffer) -> f32 {
-        text_buffer.column_offset as f32 * self.font_width
-    }
-
-    fn get_text_buffer_adjusted_origin(&self, text_buffer: &mut TextBuffer) -> (f32, f32) {
-        let margin = self.get_text_buffer_margin(text_buffer);
-        let column_offset = self.get_text_buffer_column_offset(text_buffer);
-        let text_layout = self.buffer_layouts.get(&text_buffer.path).unwrap();
-        (text_layout.origin.0 + margin - column_offset, text_layout.origin.1)
-    }
-
-    pub fn update_buffer_layout(&mut self, origin: (f32, f32), extents: (f32, f32), text_buffer: &mut TextBuffer) -> Result<()> {
-        let mut lines = text_buffer.get_text_view_as_utf16();
-        let margin = self.get_text_buffer_margin(text_buffer);
+    pub fn update_buffer_layout(&mut self, text_document: &mut TextDocument) -> Result<()> {
+        let mut lines = text_document.buffer.get_text_view_as_utf16(
+            text_document.view.line_offset, 
+            text_document.view.line_offset + self.get_max_rows()
+        );
 
         unsafe {
             let mut text_layout = None;
@@ -257,58 +265,44 @@ impl TextRenderer {
                 PWSTR(lines.as_mut_ptr()),
                 lines.len() as u32,
                 &self.text_format,
-                self.pixel_size.width as f32 - margin,
+                self.pixel_size.width as f32,
                 self.pixel_size.height as f32,
                 &mut text_layout
             ).ok()?;
-            self.buffer_layouts.insert(text_buffer.path.to_string(), TextLayout { origin, extents, layout: text_layout.unwrap() });
+            self.buffer_layouts.insert(text_document.buffer.path.to_string(), text_layout.unwrap());
         }
         Ok(())
     }
 
-    pub fn update_buffer_line_number_layout(&mut self, origin: (f32, f32), extents: (f32, f32), text_buffer: &mut TextBuffer) -> Result<()> {
-        let mut line_number_string = text_buffer.get_line_number_string();
-        unsafe {
-            let mut text_layout = None;
-            self.dwrite_factory.CreateTextLayout(
-                PWSTR(line_number_string.as_mut_ptr()),
-                line_number_string.len() as u32,
-                &self.text_format,
-                self.get_text_buffer_margin(text_buffer),
-                self.pixel_size.height as f32,
-                &mut text_layout
-            ).ok()?;
-            self.buffer_line_number_layouts.insert(text_buffer.path.to_string(), TextLayout { origin, extents, layout: text_layout.unwrap() });
-        }
-        Ok(())
-    }
-
-    pub fn mouse_pos_to_text_pos(&self, text_buffer: &mut TextBuffer, mouse_pos: (f32, f32)) -> Result<usize> {
-        let text_layout = self.buffer_layouts.get(&text_buffer.path).unwrap();
-        let adjusted_origin = self.get_text_buffer_adjusted_origin(text_buffer);
+    pub fn mouse_pos_to_text_pos(&self, text_document: &mut TextDocument, mouse_pos: (f32, f32)) -> Result<TextPosition> {
+        let text_layout = self.buffer_layouts.get(&text_document.buffer.path).unwrap();
+        let column_offset = text_document.view.column_offset as f32 * self.font_width;
         
         let mut is_inside = BOOL::from(false);
         let mut metrics = DWRITE_HIT_TEST_METRICS::default();
         unsafe {
-            text_layout.layout.HitTestPoint(
-                mouse_pos.0 - adjusted_origin.0,
-                mouse_pos.1 - adjusted_origin.1,
-                text_buffer.get_caret_trailing_as_mut_ref(),
+            text_layout.HitTestPoint(
+                mouse_pos.0 + column_offset,
+                mouse_pos.1,
+                text_document.buffer.get_caret_trailing_as_mut_ref(),
                 &mut is_inside,
                 &mut metrics
             ).ok()?;
         }
-        Ok(metrics.textPosition as usize)
+        Ok(TextPosition {
+            line_offset: text_document.view.line_offset,
+            char_offset: metrics.textPosition as usize
+        })
     }
 
-    fn draw_selection_range(&self, origin: (f32, f32), text_layout: &IDWriteTextLayout, range: DWRITE_TEXT_RANGE) -> Result<()> {
+    fn draw_selection_range(&self, column_offset: f32, text_layout: &IDWriteTextLayout, range: DWRITE_TEXT_RANGE) -> Result<()> {
         let mut hit_test_count = 0;
         unsafe {
             let error_code = text_layout.HitTestTextRange(
                 range.startPosition, 
                 range.length,
-                origin.0,
-                origin.1,
+                -column_offset,
+                0.0,
                 null_mut(),
                 0,
                 &mut hit_test_count
@@ -321,8 +315,8 @@ impl TextRenderer {
             text_layout.HitTestTextRange(
                 range.startPosition,
                 range.length,
-                origin.0,
-                origin.1,
+                -column_offset,
+                0.0,
                 hit_tests.as_mut_ptr(),
                 hit_tests.len() as u32,
                 &mut hit_test_count
@@ -344,7 +338,7 @@ impl TextRenderer {
         Ok(())
     }
 
-    fn get_rect_from_hit_test(&self, pos: u32, origin: (f32, f32), text_layout: &IDWriteTextLayout) -> Result<D2D_RECT_F> {
+    fn get_rect_from_hit_test(&self, pos: u32, column_offset: f32, text_layout: &IDWriteTextLayout) -> Result<D2D_RECT_F> {
         let mut metrics = DWRITE_HIT_TEST_METRICS::default();
         let mut dummy = (0.0, 0.0);
 
@@ -358,10 +352,10 @@ impl TextRenderer {
             ).ok()?;
 
             Ok(D2D_RECT_F {
-                left: origin.0 + metrics.left,
-                top: origin.1 + metrics.top,
-                right: origin.0 + metrics.left + metrics.width,
-                bottom: origin.1 + metrics.top + metrics.height
+                left: metrics.left - column_offset,
+                top: metrics.top,
+                right: metrics.left + metrics.width - column_offset,
+                bottom: metrics.top + metrics.height
             })
         }
     }
@@ -383,11 +377,11 @@ impl TextRenderer {
         }
     }
 
-    fn draw_enclosing_brackets(&self, origin: (f32, f32), text_layout: &IDWriteTextLayout, enclosing_bracket_positions: [Option<usize>; 2]) -> Result<()> {
+    fn draw_enclosing_brackets(&self, column_offset: f32, text_layout: &IDWriteTextLayout, enclosing_bracket_positions: [Option<usize>; 2]) -> Result<()> {
         match &enclosing_bracket_positions {
             [Some(pos1), Some(pos2)] => {
-                let rect1 = self.get_rect_from_hit_test(*pos1 as u32, origin, &text_layout)?;
-                let rect2 = self.get_rect_from_hit_test(*pos2 as u32, origin, &text_layout)?;
+                let rect1 = self.get_rect_from_hit_test(*pos1 as u32, column_offset, &text_layout)?;
+                let rect2 = self.get_rect_from_hit_test(*pos2 as u32, column_offset, &text_layout)?;
 
                 // If the brackets are right next to eachother, draw one big rect
                 if *pos2 == (*pos1 + 1) {
@@ -405,7 +399,7 @@ impl TextRenderer {
                 self.draw_rounded_rect(&rect2);
             }
             [None, Some(pos)]  | [Some(pos), None] => {
-                let rect = self.get_rect_from_hit_test(*pos as u32, origin, &text_layout)?;
+                let rect = self.get_rect_from_hit_test(*pos as u32, column_offset, &text_layout)?;
                 self.draw_rounded_rect(&rect);
             }
             [None, None] => {}
@@ -413,25 +407,9 @@ impl TextRenderer {
         Ok(())
     }
 
-    fn draw_line_numbers(&self, text_buffer: &mut TextBuffer) {
-        let text_layout = self.buffer_line_number_layouts.get(&text_buffer.path).unwrap();
-
+    fn draw_text(&self, column_offset: f32, text_document: &mut TextDocument, text_layout: &IDWriteTextLayout) -> Result<()> {
         unsafe {
-            self.render_target.DrawTextLayout(
-                D2D_POINT_2F {
-                    x: text_layout.origin.0,
-                    y: text_layout.origin.1
-                },
-                &text_layout.layout,
-                self.theme.line_number_brush.as_ref().unwrap(),
-                D2D1_DRAW_TEXT_OPTIONS::D2D1_DRAW_TEXT_OPTIONS_NONE
-            );
-        }
-    }
-
-    fn draw_text(&self, origin: (f32, f32), text_buffer: &mut TextBuffer, text_layout: &IDWriteTextLayout) -> Result<()> {
-        unsafe {
-            let lexical_highlights = text_buffer.get_lexical_highlights();
+            let lexical_highlights = text_document.buffer.get_lexical_highlights(text_document.view.line_offset, text_document.view.line_offset + self.get_max_rows());
             // In case of overlap, lexical highlights trump semantic for now.
             // This is to ensure that commenting out big sections of code happen
             // instantaneously
@@ -444,15 +422,15 @@ impl TextRenderer {
                 }
             }
 
-            if let Some(selection_range) = text_buffer.get_selection_range() {
-                self.draw_selection_range(origin, text_layout, DWRITE_TEXT_RANGE { startPosition: selection_range.start, length: selection_range.length })?;
+            if let Some(selection_range) = text_document.buffer.get_selection_range(text_document.view.line_offset, text_document.view.line_offset + self.get_max_rows()) {
+                self.draw_selection_range(column_offset, text_layout, DWRITE_TEXT_RANGE { startPosition: selection_range.start, length: selection_range.length })?;
             }
             if let Some(enclosing_bracket_ranges) = lexical_highlights.enclosing_brackets {
-                self.draw_enclosing_brackets(origin, &text_layout, enclosing_bracket_ranges)?;
+                self.draw_enclosing_brackets(column_offset, &text_layout, enclosing_bracket_ranges)?;
             }
 
             self.render_target.DrawTextLayout(
-                D2D_POINT_2F { x: origin.0, y: origin.1 },
+                D2D_POINT_2F { x: -column_offset, y: 0.0 },
                 text_layout,
                 self.theme.text_brush.as_ref().unwrap(),
                 D2D1_DRAW_TEXT_OPTIONS::D2D1_DRAW_TEXT_OPTIONS_NONE
@@ -461,24 +439,24 @@ impl TextRenderer {
         Ok(())
     }
 
-    fn draw_caret(&self, origin: (f32, f32), text_buffer: &mut TextBuffer, text_layout: &IDWriteTextLayout) -> Result<()> {
-        if let Some(caret_offset) = text_buffer.get_caret_offset() {
+    fn draw_caret(&self, column_offset: f32, text_document: &mut TextDocument, text_layout: &IDWriteTextLayout) -> Result<()> {
+        if let Some(caret_offset) = text_document.buffer.get_caret_offset(text_document.view.line_offset, text_document.view.line_offset + self.get_max_rows()) {
             let mut caret_pos: (f32, f32) = (0.0, 0.0);
             let mut metrics = DWRITE_HIT_TEST_METRICS::default();
             unsafe {
                 text_layout.HitTestTextPosition(
                     caret_offset as u32,
-                    text_buffer.get_caret_trailing(),
+                    text_document.buffer.get_caret_trailing(),
                     &mut caret_pos.0,
                     &mut caret_pos.1,
                     &mut metrics
                 ).ok()?;
 
                 let rect = D2D_RECT_F {
-                    left: origin.0 + caret_pos.0 - (self.caret_width as f32 / 2.0),
-                    top: origin.1 + caret_pos.1,
-                    right: origin.0 + caret_pos.0 + (self.caret_width as f32 / 2.0),
-                    bottom: origin.1 + caret_pos.1 + metrics.height
+                    left: caret_pos.0 - (self.caret_width as f32 / 2.0) - column_offset,
+                    top: caret_pos.1,
+                    right: caret_pos.0 + (self.caret_width as f32 / 2.0) - column_offset,
+                    bottom: caret_pos.1 + metrics.height
                 };
 
                 self.render_target.SetAntialiasMode(D2D1_ANTIALIAS_MODE::D2D1_ANTIALIAS_MODE_ALIASED);
@@ -489,33 +467,36 @@ impl TextRenderer {
         Ok(())
     }
 
-    pub fn draw(&self, text_buffer: &mut TextBuffer) -> Result<()> {
+    pub fn draw(&self, text_document: &mut TextDocument) -> Result<()> {
         unsafe {
             self.render_target.BeginDraw();
 
             self.render_target.SetTransform(&Matrix3x2::identity());
             self.render_target.Clear(&self.theme.background_color);
 
-            self.draw_line_numbers(text_buffer);
+            let text_layout = self.buffer_layouts.get(&text_document.buffer.path).unwrap();
 
-            let text_layout = self.buffer_layouts.get(&text_buffer.path).unwrap();
-            let margin = self.get_text_buffer_margin(text_buffer);
-            let column_offset = self.get_text_buffer_column_offset(text_buffer);
+            if text_document.buffer.view_dirty {
+                let (caret_line, caret_column) = text_document.buffer.get_caret_line_and_column();
+                self.adjust_text_view(&mut text_document.view, caret_line, caret_column);
+                text_document.buffer.view_dirty = false;
+            }
 
-            let clip_rect = D2D_RECT_F {
-                left: text_layout.origin.0 + margin,
-                top: text_layout.origin.1,
-                right: text_layout.origin.0 + text_layout.extents.0,
-                bottom: text_layout.origin.1 + text_layout.extents.1
-            };
-            self.render_target.PushAxisAlignedClip(&clip_rect, D2D1_ANTIALIAS_MODE::D2D1_ANTIALIAS_MODE_ALIASED);
+            let column_offset = (text_document.view.column_offset as f32) * self.font_width;
 
-            // Adjust origin to account for column offset and margin
-            let adjusted_origin = (text_layout.origin.0 + margin - column_offset, text_layout.origin.1);
+            // TODO
+            // let clip_rect = D2D_RECT_F {
+            //     left: 0.0,
+            //     top: 0.0,
+            //     right: 0.0,
+            //     bottom: 0.0
+            // };
+            // self.render_target.PushAxisAlignedClip(&clip_rect, D2D1_ANTIALIAS_MODE::D2D1_ANTIALIAS_MODE_ALIASED);
 
-            self.draw_text(adjusted_origin, text_buffer, &text_layout.layout)?;
-            self.draw_caret(adjusted_origin, text_buffer, &text_layout.layout)?;
-            self.render_target.PopAxisAlignedClip();
+            // Adjust origin to account for column offset
+            self.draw_text(column_offset, text_document, &text_layout)?;
+            self.draw_caret(column_offset, text_document, &text_layout)?;
+            // self.render_target.PopAxisAlignedClip();
 
             self.render_target.EndDraw(null_mut(), null_mut()).ok()?;
         }

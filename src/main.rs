@@ -33,10 +33,10 @@ use bindings::{
 };
 
 fn low_word(i: i32) -> i32 {
-    i & 0xFFFF
+    ((i & 0xFFFF) as i16) as i32
 }
 fn high_word(i: i32) -> i32 {
-    i >> 16
+    ((i >> 16) as i16) as i32
 }
 
 extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
