@@ -49,7 +49,8 @@ fn main() {
             DWRITE_FACTORY_TYPE, DWRITE_FONT_WEIGHT,
             DWRITE_FONT_STYLE, DWRITE_FONT_STRETCH,
             DWRITE_TEXT_ALIGNMENT, DWRITE_PARAGRAPH_ALIGNMENT,
-            DWRITE_TEXT_RANGE, DWRITE_HIT_TEST_METRICS
+            DWRITE_TEXT_RANGE, DWRITE_HIT_TEST_METRICS,
+            DWRITE_LINE_SPACING
         },
         Windows::Foundation::Numerics::Matrix3x2,
         Windows::Win32::Direct2D::{

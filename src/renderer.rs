@@ -99,11 +99,11 @@ fn create_render_target(d2d1_factory: &ID2D1Factory, hwnd: HWND) -> Result<ID2D1
     }
 }
 
-fn get_font_width_and_height(dwrite_factory: &IDWriteFactory, text_format: &IDWriteTextFormat) -> Result<(f32, f32)> {
+fn get_character_spacing(dwrite_factory: &IDWriteFactory, text_format: &IDWriteTextFormat) -> Result<f32> {
     unsafe {
         let mut temp_text_layout = None;
         let text_layout = dwrite_factory.CreateTextLayout(
-            pwstr_from_str("a"),
+            pwstr_from_str("M"),
             1,
             text_format,
             0.0,
@@ -121,15 +121,16 @@ fn get_font_width_and_height(dwrite_factory: &IDWriteFactory, text_format: &IDWr
             &mut metrics
         ).ok()?;
 
-        Ok((metrics.width, metrics.height))
+        Ok(metrics.width)
     }
 }
 
 pub struct TextRenderer {
     pub pixel_size: D2D_SIZE_U,
     pub font_size: f32,
-    pub font_height: f32,
-    pub font_width: f32,
+    line_spacing: f32,
+    character_spacing: f32,
+
     font_name: String,
 
     caret_width: u32,
@@ -170,17 +171,25 @@ impl TextRenderer {
             text_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT::DWRITE_PARAGRAPH_ALIGNMENT_NEAR).ok()?;
             text_format.SetWordWrapping(DWRITE_WORD_WRAPPING::DWRITE_WORD_WRAPPING_NO_WRAP).ok()?;
 
-            let (font_width, font_height) = get_font_width_and_height(&dwrite_factory, &text_format)?;
-            text_format.SetIncrementalTabStop(font_width * settings::NUMBER_OF_SPACES_PER_TAB as f32).ok()?;
+            let pixel_aligned_line_spacing = f32::ceil(scaled_font_size * settings::LINE_SPACING_FACTOR);
+            text_format.SetLineSpacing(
+                DWRITE_LINE_SPACING_METHOD::DWRITE_LINE_SPACING_METHOD_UNIFORM, 
+                pixel_aligned_line_spacing, 
+                pixel_aligned_line_spacing * 0.8
+            ).ok()?;
+
+            let character_spacing = get_character_spacing(&dwrite_factory, &text_format)?;
+            text_format.SetIncrementalTabStop(character_spacing * settings::NUMBER_OF_SPACES_PER_TAB as f32).ok()?;
 
             let d2d1_factory = create_d2d1_factory()?;
             let render_target = create_render_target(&d2d1_factory, hwnd)?;
+            render_target.SetAntialiasMode(D2D1_ANTIALIAS_MODE::D2D1_ANTIALIAS_MODE_ALIASED);
 
             Ok(Self {
                 pixel_size: get_client_size(hwnd),
                 font_size: scaled_font_size,
-                font_height,
-                font_width,
+                line_spacing: pixel_aligned_line_spacing,
+                character_spacing,
                 font_name: String::from(font),
                 caret_width,
                 theme: Theme::new_default(&render_target)?,
@@ -205,21 +214,25 @@ impl TextRenderer {
             self.text_format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT::DWRITE_TEXT_ALIGNMENT_LEADING).ok()?;
             self.text_format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT::DWRITE_PARAGRAPH_ALIGNMENT_NEAR).ok()?;
             self.text_format.SetWordWrapping(DWRITE_WORD_WRAPPING::DWRITE_WORD_WRAPPING_NO_WRAP).ok()?;
+            self.line_spacing = f32::ceil(self.font_size * settings::LINE_SPACING_FACTOR);
+            self.text_format.SetLineSpacing(
+                DWRITE_LINE_SPACING_METHOD::DWRITE_LINE_SPACING_METHOD_UNIFORM, 
+                self.line_spacing, 
+                self.line_spacing * 0.8
+            ).ok()?;
     
-            let (font_width, font_height) = get_font_width_and_height(&self.dwrite_factory, &self.text_format)?;
-            self.text_format.SetIncrementalTabStop(font_width * settings::NUMBER_OF_SPACES_PER_TAB as f32).ok()?;
-            self.font_width = font_width;
-            self.font_height = font_height;
+            self.character_spacing = get_character_spacing(&self.dwrite_factory, &self.text_format)?;
+            self.text_format.SetIncrementalTabStop(self.character_spacing * settings::NUMBER_OF_SPACES_PER_TAB as f32).ok()?;
         }
         Ok(())
     }
 
     pub fn get_max_rows(&self) -> usize {
-        (self.pixel_size.height as f32 / self.font_height).ceil() as usize
+        (self.pixel_size.height as f32 / self.line_spacing).ceil() as usize
     }
 
     pub fn get_max_columns(&self) -> usize {
-        (self.pixel_size.width as f32 / self.font_width) as usize
+        (self.pixel_size.width as f32 / self.character_spacing) as usize
     }
 
     pub fn get_extents(&self) -> (f32, f32) {
@@ -276,7 +289,7 @@ impl TextRenderer {
 
     pub fn mouse_pos_to_text_pos(&self, text_document: &mut TextDocument, mouse_pos: (f32, f32)) -> Result<TextPosition> {
         let text_layout = self.buffer_layouts.get(&text_document.buffer.path).unwrap();
-        let column_offset = text_document.view.column_offset as f32 * self.font_width;
+        let column_offset = text_document.view.column_offset as f32 * self.character_spacing;
         
         let mut is_inside = BOOL::from(false);
         let mut metrics = DWRITE_HIT_TEST_METRICS::default();
@@ -322,7 +335,6 @@ impl TextRenderer {
                 &mut hit_test_count
             ).ok()?;
 
-            self.render_target.SetAntialiasMode(D2D1_ANTIALIAS_MODE::D2D1_ANTIALIAS_MODE_ALIASED);
             hit_tests.iter().for_each(|metrics| {
                 let highlight_rect = D2D_RECT_F {
                     left: metrics.left,
@@ -333,7 +345,6 @@ impl TextRenderer {
 
                 self.render_target.FillRectangle(&highlight_rect, self.theme.selection_brush.as_ref().unwrap());
             });
-            self.render_target.SetAntialiasMode(D2D1_ANTIALIAS_MODE::D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
         }
         Ok(())
     }
@@ -351,25 +362,20 @@ impl TextRenderer {
                 &mut metrics,
             ).ok()?;
 
+            // Offset by +- 1 to ensure rect is drawn within bounds
             Ok(D2D_RECT_F {
-                left: metrics.left - column_offset,
-                top: metrics.top,
-                right: metrics.left + metrics.width - column_offset,
-                bottom: metrics.top + metrics.height
+                left: metrics.left - column_offset + 1.0,
+                top: metrics.top + 1.0,
+                right: metrics.left + metrics.width - column_offset - 1.0,
+                bottom: metrics.top + metrics.height - 1.0
             })
         }
     }
 
-    fn draw_rounded_rect(&self, rect: &D2D_RECT_F) {
-        let rounded_rect = D2D1_ROUNDED_RECT {
-            rect: *rect,
-            radiusX: 3.0,
-            radiusY: 3.0
-        };
-
+    fn draw_rect(&self, rect: &D2D_RECT_F) {
         unsafe {
-            self.render_target.DrawRoundedRectangle(
-                &rounded_rect, 
+            self.render_target.DrawRectangle(
+                rect, 
                 self.theme.bracket_brush.as_ref().unwrap(), 
                 self.theme.bracket_rect_width, 
                 None
@@ -386,21 +392,21 @@ impl TextRenderer {
                 // If the brackets are right next to eachother, draw one big rect
                 if *pos2 == (*pos1 + 1) {
                     let rect = D2D_RECT_F {
-                        left: rect1.left,
-                        top: rect1.top,
-                        right: rect2.right,
-                        bottom: rect2.bottom
+                        left: rect1.left + 1.0,
+                        top: rect1.top + 1.0,
+                        right: rect2.right - 1.0,
+                        bottom: rect2.bottom - 1.0
                     };
-                    self.draw_rounded_rect(&rect);
+                    self.draw_rect(&rect);
                     return Ok(());
                 }
 
-                self.draw_rounded_rect(&rect1);
-                self.draw_rounded_rect(&rect2);
+                self.draw_rect(&rect1);
+                self.draw_rect(&rect2);
             }
             [None, Some(pos)]  | [Some(pos), None] => {
                 let rect = self.get_rect_from_hit_test(*pos as u32, column_offset, &text_layout)?;
-                self.draw_rounded_rect(&rect);
+                self.draw_rect(&rect);
             }
             [None, None] => {}
         }
@@ -459,9 +465,7 @@ impl TextRenderer {
                     bottom: caret_pos.1 + metrics.height
                 };
 
-                self.render_target.SetAntialiasMode(D2D1_ANTIALIAS_MODE::D2D1_ANTIALIAS_MODE_ALIASED);
                 self.render_target.FillRectangle(&rect, self.theme.caret_brush.as_ref().unwrap());
-                self.render_target.SetAntialiasMode(D2D1_ANTIALIAS_MODE::D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
             }
         }
         Ok(())
@@ -482,7 +486,7 @@ impl TextRenderer {
                 text_document.buffer.view_dirty = false;
             }
 
-            let column_offset = (text_document.view.column_offset as f32) * self.font_width;
+            let column_offset = (text_document.view.column_offset as f32) * self.character_spacing;
 
             // TODO
             // let clip_rect = D2D_RECT_F {
@@ -509,9 +513,6 @@ impl TextRenderer {
         unsafe {
             self.render_target.Resize(&self.pixel_size).ok()?;
         }
-        let (font_width, font_height) = get_font_width_and_height(&self.dwrite_factory, &self.text_format).unwrap();
-        self.font_width = font_width;
-        self.font_height = font_height;
         Ok(())
     }
 }

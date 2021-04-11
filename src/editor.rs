@@ -75,16 +75,14 @@ pub fn scroll_view_left(text_document: &mut TextDocument, lines_per_roll: usize)
     }
 }
 
-pub fn scroll_view_right(text_document: &mut TextDocument, lines_per_roll: usize) {
-    let new_column = text_document.view.column_offset + lines_per_roll;
-    let line_length = text_document.buffer.get_current_line_length();
+pub fn scroll_view_right(text_document: &mut TextDocument, lines_per_roll: usize, max_columns: usize) {
+    // If the entire line can be displayed, stop scrolling right
+    let line_length = text_document.buffer.get_current_line_visible_length();
+    if text_document.view.column_offset + max_columns > line_length {
+        return;
+    }
 
-    if new_column > line_length {
-        text_document.view.column_offset = line_length - 1;
-    }
-    else {
-        text_document.view.column_offset = new_column;
-    }
+    text_document.view.column_offset += lines_per_roll;
 }
 pub struct Editor {
     hwnd: HWND,
@@ -224,33 +222,38 @@ impl Editor {
                 }
                 EditorCommand::LeftClick(mouse_pos, shift_down) => {
                     let text_pos = unwrap_hresult(self.renderer.mouse_pos_to_text_pos(document, mouse_pos));
-                    document.buffer.execute_command(&BufferCommand::LeftClick(text_pos, shift_down));
+                    document.buffer.execute_command(&BufferCommand::LeftClick(text_pos, shift_down))
                 }
                 EditorCommand::LeftDoubleClick(mouse_pos) => {
                     let text_pos = unwrap_hresult(self.renderer.mouse_pos_to_text_pos(document, mouse_pos));
-                    document.buffer.execute_command(&BufferCommand::LeftDoubleClick(text_pos));
+                    document.buffer.execute_command(&BufferCommand::LeftDoubleClick(text_pos))
                 }
                 EditorCommand::LeftRelease => document.buffer.execute_command(&BufferCommand::LeftRelease),
                 EditorCommand::MouseMove(mouse_pos) => {
-                    let extents = self.renderer.get_extents();
-                    if mouse_pos.1 > (TEXT_ORIGIN.1 + extents.1) {
-                        scroll_view_down(document, SCROLL_LINES_PER_DRAG);
-                    }
-                    else if mouse_pos.1 < TEXT_ORIGIN.1 {
-                        scroll_view_up(document, SCROLL_LINES_PER_DRAG);
-                    }
-                    if mouse_pos.0 > (TEXT_ORIGIN.0 + extents.0) {
-                        scroll_view_right(document, SCROLL_LINES_PER_DRAG);
-                    }
-                    else if mouse_pos.0 < TEXT_ORIGIN.0 {
-                        scroll_view_left(document, SCROLL_LINES_PER_DRAG);
-                    }
                     if document.buffer.currently_selecting {
+                        let extents = self.renderer.get_extents();
+                        if mouse_pos.1 > (TEXT_ORIGIN.1 + extents.1) {
+                            scroll_view_down(document, SCROLL_LINES_PER_DRAG);
+                        }
+                        else if mouse_pos.1 < TEXT_ORIGIN.1 {
+                            scroll_view_up(document, SCROLL_LINES_PER_DRAG);
+                        }
+                        if mouse_pos.0 > (TEXT_ORIGIN.0 + extents.0) {
+                            scroll_view_right(document, SCROLL_LINES_PER_DRAG, self.renderer.get_max_columns());
+                        }
+                        else if mouse_pos.0 < TEXT_ORIGIN.0 {
+                            scroll_view_left(document, SCROLL_LINES_PER_DRAG);
+                        }
                         let text_pos = unwrap_hresult(self.renderer.mouse_pos_to_text_pos(document, mouse_pos));
-                        document.buffer.execute_command(&BufferCommand::SetMouseSelection(text_pos));
+                        document.buffer.execute_command(&BufferCommand::SetMouseSelection(text_pos))
                     }
                 }
-                EditorCommand::KeyPressed(key, shift_down, ctrl_down) => document.buffer.execute_command(&BufferCommand::KeyPressed(key, shift_down, ctrl_down, self.hwnd)),
+                EditorCommand::KeyPressed(key, shift_down, ctrl_down) => {
+                    if key == VK_RETURN && !ctrl_down {
+                        document.view.column_offset = 0;
+                    }
+                    document.buffer.execute_command(&BufferCommand::KeyPressed(key, shift_down, ctrl_down, self.hwnd))
+                },
                 EditorCommand::CharInsert(character) => document.buffer.execute_command(&BufferCommand::CharInsert(character))
             }
         }

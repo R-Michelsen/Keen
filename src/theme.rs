@@ -84,7 +84,7 @@ impl Theme {
             background_color: DEFAULT_BACKGROUND_COLOR,
             status_bar_brush: None,
             bracket_brush: None,
-            bracket_rect_width: 2.0,
+            bracket_rect_width: 1.0,
             text_brush: None,
             line_number_brush: None,
             caret_brush: None,

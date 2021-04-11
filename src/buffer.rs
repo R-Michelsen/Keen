@@ -124,9 +124,10 @@ impl TextBuffer {
     }
 
     #[inline(always)]
-    pub fn get_current_line_length(&self) -> usize {
+    pub fn get_current_line_visible_length(&self) -> usize {
         let current_line = self.rope.char_to_line(self.get_caret_absolute_pos());
-        self.rope.line(current_line).len_chars()
+        // Strip line of new line characters, they are not included in the visible length
+        self.rope.line(current_line).to_string().trim_end_matches(|c| c == '\n' || c == '\r').len()
     }
 
     #[inline(always)]
@@ -294,6 +295,7 @@ impl TextBuffer {
         if self.caret_char_pos == self.rope.len_chars() {
             self.caret_trailing = BOOL::from(false);
         }
+        self.view_dirty = true;
     }
 
     fn select_all(&mut self) {
