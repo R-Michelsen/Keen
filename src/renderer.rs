@@ -377,7 +377,7 @@ impl TextRenderer {
             self.render_target.DrawRectangle(
                 rect, 
                 self.theme.bracket_brush.as_ref().unwrap(), 
-                self.theme.bracket_rect_width, 
+                1.0,
                 None
             );
         }
